@@ -1,0 +1,46 @@
+name: 'vibeward'
+description: 'Security scan for AI-generated / vibe-coded apps (Supabase, Lovable, MCP). Uploads results to the GitHub Security tab.'
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  path:
+    description: 'Folder to scan'
+    required: false
+    default: '.'
+  supabase:
+    description: 'Path to a Supabase audit export JSON (see `vibeward supabase-sql`)'
+    required: false
+    default: ''
+  fail-on-critical:
+    description: 'Fail the job when a critical finding is present'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Run vibeward
+      shell: bash
+      run: |
+        ARGS="scan ${{ inputs.path }} --sarif vibeward.sarif --yes"
+        if [ -n "${{ inputs.supabase }}" ]; then ARGS="$ARGS --supabase ${{ inputs.supabase }}"; fi
+        set +e
+        npx --yes vibeward@latest $ARGS
+        CODE=$?
+        set -e
+        echo "vibeward_code=$CODE" >> "$GITHUB_ENV"
+        if [ "${{ inputs.fail-on-critical }}" != "true" ]; then exit 0; fi
+        exit $CODE
+
+    - name: Upload SARIF to the Security tab
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: vibeward.sarif

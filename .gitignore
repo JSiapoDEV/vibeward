@@ -1,0 +1,22 @@
+# Dependencias (no hay por ahora, pero por si acaso)
+node_modules/
+package-lock.json
+
+# Informes generados al escanear apps reales — NO subir (pueden contener datos de clientes)
+informe-*.md
+informe-*.json
+!informe-ejemplo.md
+
+# Entorno y secretos
+.env
+.env.*
+*.local
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.log
+
+# Build
+dist/
+.idea/

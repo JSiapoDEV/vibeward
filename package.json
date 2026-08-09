@@ -1,0 +1,62 @@
+{
+  "name": "vibeward",
+  "version": "0.1.0",
+  "description": "Security scanner for AI-generated / vibe-coded apps (Lovable, Bolt, v0, Supabase). Finds exposed secrets, missing RLS and insecure headers. Read-only, authorized use.",
+  "type": "module",
+  "bin": {
+    "vibeward": "dist/scan.js"
+  },
+  "main": "dist/scan.js",
+  "types": "dist/scan.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/scan.ts",
+    "demo": "tsx src/demo.ts",
+    "test": "tsx test/self-test.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "security",
+    "scanner",
+    "supabase",
+    "rls",
+    "row-level-security",
+    "lovable",
+    "vibe-coding",
+    "appsec",
+    "devsecops",
+    "mcp"
+  ],
+  "author": "José Siapo (https://github.com/jsiapodev)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JSiapoDEV/vibeward.git"
+  },
+  "homepage": "https://github.com/JSiapoDEV/vibeward#readme",
+  "bugs": {
+    "url": "https://github.com/JSiapoDEV/vibeward/issues"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.13.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.10.0"
+  }
+}
