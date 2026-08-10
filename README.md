@@ -28,15 +28,21 @@ The platforms tell you securing the data is *your* responsibility. `vibeward` is
 
 ## What it scans
 
-1. **Exposed secrets** in every JS bundle — Supabase `service_role` (decoded from the JWT role,
-   so the public `anon` key is not flagged), Stripe, OpenAI, Anthropic, Google, AWS, GitHub,
-   Resend, SendGrid, Twilio, private PEM keys, and suspicious secret assignments.
-2. **Supabase Row-Level Security** — probes ~60 common table names with the public key. If a table
-   returns data, RLS is broken, and it flags which columns hold personal data.
-3. **HTTP security headers** — CSP, HSTS, X-Frame-Options, X-Content-Type-Options, and tech leaks.
+1. **Exposed secrets** in every JS bundle — Supabase `service_role` and the new-format
+   `sb_secret_` key, Stripe, OpenAI, Anthropic, Google, AWS, GitHub, Slack, database
+   connection strings, Resend, SendGrid, Twilio, private PEM keys, and suspicious assignments.
+2. **Supabase Row-Level Security** — **enumerates the exposed tables live** from the data API
+   (falling back to common names), then probes each with the public key — including new-format
+   `sb_publishable_` keys. If a table returns data, RLS is broken; it flags which columns hold
+   personal data, scans returned rows for leaked third-party secrets, and checks GraphQL
+   introspection. `--write-test` adds an opt-in, non-mutating check for unauthenticated writes.
+3. **Firebase** — detects the client config and probes for an open Realtime Database and a
+   publicly listable Storage bucket.
+4. **Source maps & HTTP headers** — exposed `.map` files, plus CSP, HSTS, X-Frame-Options,
+   X-Content-Type-Options, and technology leaks.
 
-Server-side checks (authorization, input validation, rate limiting, backups) are covered by the
-manual part of an audit — see [`CHECKLIST-25.md`](../CHECKLIST-25.md).
+By default the scan is strictly read-only. Server-side checks (authorization/IDOR, input
+validation, rate limiting, backups) are covered by the manual part of an audit.
 
 ## Run it
 
@@ -142,11 +148,6 @@ jobs:
 Findings upload as SARIF; the job fails on a critical finding (set `fail-on-critical: 'false'` to
 report without gating).
 
-## Example report
-
-Run `npm run demo` to generate a sample report from synthetic data — it's identical to what a
-client receives, with critical findings, an executive summary and a database-exposure table.
-
 ## Development
 
 Requires Node **24** (`.nvmrc`); the published build targets Node ≥ 20.
@@ -162,20 +163,21 @@ npm run lint && npm run format:check        # ESLint + Prettier
 
 ```
 src/
-  scan.ts          CLI entry (url / scan / supabase-sql)
-  demo.ts          sample-report generator
-  lib/
-    fetchers.ts    fetch + bundle discovery
-    secrets.ts     secret patterns & detection (URL + source)
-    supabase.ts    RLS probe + audit-export analysis
-    folder.ts      white-box folder walk
-    migrations.ts  SQL migration analysis
-    headers.ts     security headers
-    report.ts      Markdown report
-    sarif.ts       SARIF 2.1.0 output
-    types.ts       shared types
-test/self-test.ts  synthetic tests
-action.yml         GitHub Action (composite)
+  cli.ts             entry point — arg parsing & command dispatch
+  core/              types, version, terminal helpers, arg parsing
+  http/              fetch client + script/bundle discovery
+  checks/            detection logic, one file per domain:
+    secrets.ts         secret patterns (URL + source)
+    supabase.ts        table enumeration, RLS/write probe, GraphQL, audit export
+    firebase.ts        RTDB + Storage exposure
+    migrations.ts      SQL migration analysis
+    headers.ts         security headers
+    sourcemaps.ts      exposed source maps
+    intent.ts          guardrail intent rules
+  scanners/          orchestrators: url (black-box), folder (white-box), guard (hook)
+  reporters/         markdown report, SARIF output, output/finish
+test/self-test.ts    synthetic tests (touch nothing external)
+action.yml           GitHub Action (composite)
 ```
 
 ## License

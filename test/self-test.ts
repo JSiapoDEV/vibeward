@@ -1,12 +1,28 @@
 // Self-test with SYNTHETIC data (no real secrets). Validates detection logic
 // without touching any external system. Run with: npm test
-import { scanText, scanSource, extractSupabaseConfig } from '../src/lib/secrets.js';
-import { checkHeaders } from '../src/lib/headers.js';
-import { buildReport } from '../src/lib/report.js';
-import { analyzeMigrations } from '../src/lib/migrations.js';
-import { analyzeSupabaseExport } from '../src/lib/supabase.js';
-import { toSarif } from '../src/lib/sarif.js';
-import { scanIntent } from '../src/lib/intent.js';
+import {
+  scanText,
+  scanSource,
+  scanReturnedData,
+  extractSupabaseConfig,
+} from '../src/checks/secrets.js';
+import { checkHeaders } from '../src/checks/headers.js';
+import { buildReport } from '../src/reporters/markdown.js';
+import { analyzeMigrations } from '../src/checks/migrations.js';
+import {
+  analyzeSupabaseExport,
+  parseOpenApiTables,
+  graphqlIntrospectionFinding,
+} from '../src/checks/supabase.js';
+import { toSarif } from '../src/reporters/sarif.js';
+import { scanIntent } from '../src/checks/intent.js';
+import { resolveSourceMapUrl, sourceMapFinding } from '../src/checks/sourcemaps.js';
+import { extractFirebaseConfig, firebaseStorageFinding } from '../src/checks/firebase.js';
+import {
+  checkNextConfigHeaders,
+  checkServerActionAuth,
+  checkExportFormulaInjection,
+} from '../src/checks/backend.js';
 
 let pass = 0;
 let fail = 0;
@@ -142,6 +158,7 @@ console.log('\n4. Report generation');
     rls: {
       projectUrl: 'https://x.supabase.co',
       probed: 60,
+      enumerated: 0,
       exposedCount: 1,
       exposed: [
         {
@@ -154,6 +171,8 @@ console.log('\n4. Report generation');
         },
       ],
       piiTables: [{ table: 'users', status: 'exposed', leakedColumns: ['email', 'phone'] }],
+      writable: [],
+      dataSecrets: [],
       allResults: [],
     },
     scanned: ['Headers', 'Secrets', 'RLS'],
@@ -276,6 +295,209 @@ console.log('\n10. Intent gate (guards what the user asks the AI)');
   assert(!danger('add a dark mode toggle to the settings page'), 'ignores a benign request');
   const f = scanIntent('disable RLS')[0];
   assert(!!f && !!f.instead && !!f.why, 'finding carries why + safe alternative');
+}
+
+console.log('\n11. Source map exposure (black-box, from the URL)');
+{
+  const base = 'https://app.example.com/assets/index-abc123.js';
+  assert(
+    resolveSourceMapUrl('console.log(1)\n//# sourceMappingURL=index-abc123.js.map', base) ===
+      'https://app.example.com/assets/index-abc123.js.map',
+    'resolves a relative sourceMappingURL to an absolute .map url',
+  );
+  assert(resolveSourceMapUrl('console.log(1)', base) === null, 'no comment => no source map url');
+  assert(
+    resolveSourceMapUrl('//# sourceMappingURL=data:application/json;base64,eyJ9', base) === null,
+    'ignores inline data: maps (not a served file)',
+  );
+
+  const mapBody =
+    '{"version":3,"sources":["src/App.tsx"],"sourcesContent":["const x=1"],"mappings":"AAAA"}';
+  const finding = sourceMapFinding('https://app.example.com/assets/index.js.map', mapBody);
+  assert(finding?.id?.startsWith('sourcemap_exposed_') ?? false, 'builds a source-map finding');
+  assert(finding?.cwe === 'CWE-540', 'source-map finding carries CWE-540');
+  assert(finding?.evidence?.includes('original source') ?? false, 'flags embedded original source');
+  assert(
+    sourceMapFinding('https://app.example.com/x.js.map', 'not a source map at all') === null,
+    'does NOT flag a body that is not a source map',
+  );
+}
+
+console.log('\n12. New-format Supabase keys (sb_secret_ / sb_publishable_)');
+{
+  const secret = `sb_secret_${'A'.repeat(30)}`;
+  assert(
+    scanText(`const k = "${secret}"`, 'b.js').some((f) => f.id === 'supabase_secret_key'),
+    'flags sb_secret_ as a critical secret',
+  );
+  const proj = 'abcdefghijklmnopqrst';
+  const pub = `sb_publishable_${'B'.repeat(30)}`;
+  const cfg = extractSupabaseConfig(`url="https://${proj}.supabase.co"; key="${pub}"`);
+  assert(
+    cfg?.anonKey === pub && cfg?.keyKind === 'publishable',
+    'extracts sb_publishable_ as the probe key (would have caught Moltbook)',
+  );
+}
+
+console.log('\n13. PostgREST table enumeration (OpenAPI)');
+{
+  const doc = JSON.stringify({
+    paths: { '/': {}, '/agents': {}, '/submolts': {}, '/rpc/do_thing': {} },
+    definitions: { agents: {}, owners: {} },
+  });
+  const tables = parseOpenApiTables(doc);
+  assert(
+    ['agents', 'owners', 'submolts'].every((t) => tables.includes(t)),
+    'enumerates tables from paths + definitions (custom names, not a fixed list)',
+  );
+  assert(
+    !tables.includes('rpc/do_thing') && !tables.includes(''),
+    'skips rpc endpoints and the root path',
+  );
+  assert(parseOpenApiTables('not json').length === 0, 'a non-JSON body yields no tables');
+}
+
+console.log('\n14. Secrets inside returned data (Moltbook DM pattern)');
+{
+  const rowJson = JSON.stringify([{ id: 1, message: `my key is sk-proj-${'a'.repeat(40)}` }]);
+  const fs = scanReturnedData(rowJson, 'https://x.supabase.co/rest/v1/messages');
+  assert(
+    fs.some((f) => f.id === 'data_openai_key'),
+    'flags an OpenAI key pasted into world-readable row content',
+  );
+  assert(
+    fs.every((f) => f.id !== 'data_generic_secret_assign'),
+    'skips the noisy generic rule against row JSON',
+  );
+}
+
+console.log('\n15. Firebase config + open-bucket finding');
+{
+  const cfg = extractFirebaseConfig(
+    `const c={apiKey:"AIza${'a'.repeat(35)}",projectId:"demo-app",storageBucket:"demo-app.appspot.com"}`,
+  );
+  assert(cfg?.projectId === 'demo-app', 'extracts Firebase projectId');
+  assert(cfg?.storageBucket === 'demo-app.appspot.com', 'extracts Firebase storageBucket');
+  assert(
+    extractFirebaseConfig('const c={projectId:"demo-app"}') === null,
+    'no Firebase API key => no config (avoids false positives)',
+  );
+  const sf = firebaseStorageFinding('demo-app.appspot.com');
+  assert(
+    sf.id === 'firebase_storage_open' && sf.cwe === 'CWE-863',
+    'builds a storage-open finding',
+  );
+}
+
+console.log('\n16. GraphQL introspection + anon write grants');
+{
+  const g = graphqlIntrospectionFinding('https://x.supabase.co');
+  assert(
+    g.id === 'graphql_introspection' && g.severity === 'medium',
+    'builds a GraphQL-introspection finding',
+  );
+  const fs = analyzeMigrations([
+    { path: '002.sql', content: 'grant select, insert on public.leads to anon;' },
+  ]);
+  assert(
+    fs.some((f) => f.id === 'grant_anon_leads' && f.severity === 'high'),
+    'flags a write grant to the anon role',
+  );
+}
+
+console.log('\n17. Migration RLS gating (no false positive on plain Prisma/Neon)');
+{
+  const prismaSql =
+    'create table public."User" (id serial primary key);\ncreate table public."Item" (id serial primary key);';
+  const noCtx = analyzeMigrations([
+    { path: 'prisma/migrations/1_init/migration.sql', content: prismaSql },
+  ]);
+  assert(
+    !noCtx.some((f) => f.id.startsWith('rls_disabled_')),
+    'plain Prisma migrations => NO rls_disabled false positive (the inventario bug)',
+  );
+
+  const withCtx = analyzeMigrations([{ path: 'x.sql', content: prismaSql }], {
+    supabaseContext: true,
+  });
+  assert(
+    withCtx.some((f) => f.id.startsWith('rls_disabled_')),
+    'with supabaseContext => still flags missing RLS',
+  );
+
+  const rlsSql = `${prismaSql}\nalter table public."User" enable row level security;`;
+  const usesRls = analyzeMigrations([{ path: 'supabase/migrations/1.sql', content: rlsSql }]);
+  assert(
+    usesRls.some((f) => f.id === 'rls_disabled_item'),
+    'when the migrations use RLS => flags the table that lacks it',
+  );
+  assert(
+    !usesRls.some((f) => f.id === 'rls_disabled_user'),
+    'does NOT flag the table that enabled RLS',
+  );
+}
+
+console.log('\n18. Server-side backend checks (framework + ORM archetype)');
+{
+  // (a) Next.js security headers
+  assert(
+    checkNextConfigHeaders('next.config.ts', 'export default {};')?.id ===
+      'nextjs_no_security_headers',
+    'flags a next.config with no security headers',
+  );
+  assert(
+    checkNextConfigHeaders('next.config.ts', 'export default { async headers(){ return [] } };') ===
+      null,
+    'no flag when headers() is present',
+  );
+  assert(checkNextConfigHeaders('src/foo.ts', 'whatever') === null, 'only fires on next.config');
+
+  // (b) server action / route mutation without an auth guard
+  assert(
+    (
+      checkServerActionAuth(
+        'app/items/actions.ts',
+        '"use server";\nawait prisma.item.delete({ where: { id } });',
+      )?.id ?? ''
+    ).startsWith('unguarded_mutation_'),
+    'flags a server mutation with no auth guard',
+  );
+  assert(
+    checkServerActionAuth(
+      'app/items/actions.ts',
+      '"use server";\nawait requireRole("admin");\nawait prisma.item.delete({});',
+    ) === null,
+    'no flag when requireRole guards the mutation',
+  );
+  assert(
+    checkServerActionAuth(
+      'app/login/actions.ts',
+      '"use server";\nconst u = await prisma.user.findUnique({ where: { dni } });',
+    ) === null,
+    'no flag on a read-only action (no mutation) — low false positives',
+  );
+  assert(
+    checkServerActionAuth('lib/util.ts', 'await prisma.item.delete({})') === null,
+    'no flag outside a server action / route handler',
+  );
+
+  // (c) spreadsheet/CSV formula injection
+  assert(
+    (
+      checkExportFormulaInjection(
+        'app/api/export/route.ts',
+        'import ExcelJS from "exceljs";\nsheet.addRow({ a: it.descripcion });',
+      )?.id ?? ''
+    ).startsWith('formula_injection_'),
+    'flags an exceljs export without formula sanitization',
+  );
+  assert(
+    checkExportFormulaInjection(
+      'app/api/export/route.ts',
+      'import ExcelJS from "exceljs";\n// sanitize formula prefixes here\nsheet.addRow(safe);',
+    ) === null,
+    'no flag when sanitization is hinted',
+  );
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

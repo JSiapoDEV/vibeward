@@ -1,5 +1,5 @@
-import type { Finding, Severity } from './types.js';
-import type { RlsResult } from './supabase.js';
+import type { Finding, Severity } from '../core/types.js';
+import type { RlsResult } from '../checks/supabase.js';
 
 const SEV_ORDER: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 const SEV_LABEL: Record<Severity, string> = {
@@ -72,26 +72,35 @@ export function buildReport({
 
   if (rls) {
     md += `## Database exposure\n\n`;
+    const how =
+      rls.enumerated > 0
+        ? `${rls.enumerated} table(s) enumerated live from the data API (plus common names)`
+        : `${rls.probed} common table names`;
     if (rls.exposedCount > 0) {
-      md += `Access to **${rls.probed} common table names** was probed using only the public key. `;
+      md += `Access to **${how}** was probed using only the public key. `;
       md += `**${rls.exposedCount} table(s) returned data** — Row Level Security is missing or `;
       md += `misconfigured and any visitor can read their contents.\n\n`;
-      md += `| Table | Total rows | Sensitive columns exposed |\n|---|---|---|\n`;
+      md += `| Table | Total rows | Sensitive columns exposed | Writable |\n|---|---|---|---|\n`;
       for (const t of rls.exposed) {
         const pii = t.leakedColumns?.length ? `⚠️ ${t.leakedColumns.join(', ')}` : '—';
-        md += `| \`${t.table}\` | ${t.rowsTotal ?? '?'} | ${pii} |\n`;
+        const w = t.write === 'writable' ? '🔴 yes' : t.write === 'blocked' ? 'no' : '—';
+        md += `| \`${t.table}\` | ${t.rowsTotal ?? '?'} | ${pii} | ${w} |\n`;
       }
       md += `\n`;
       if (rls.piiTables.length) {
         md += `> ⚠️ **${rls.piiTables.length} of those tables contain personal data** `;
         md += `(emails, phones, names or others). This is an active data leak.\n\n`;
       }
+      if (rls.writable.length) {
+        md += `> 🔴 **${rls.writable.length} table(s) also accept unauthenticated writes** — `;
+        md += `anyone can tamper with the data, not just read it.\n\n`;
+      }
       md += `**How to fix:** enable RLS on every table (\`ALTER TABLE x ENABLE ROW LEVEL SECURITY;\`) `;
       md += `and write policies that filter by \`auth.uid()\`, not \`true\`.\n\n`;
     } else if (rls.probed) {
-      md += `${rls.probed} common table names were probed with the public key. `;
-      md += `None returned data: **RLS appears active** on common tables. `;
-      md += `Note: this does not prove every table is protected, only the frequently-named ones.\n\n`;
+      md += `${how} were probed with the public key. `;
+      md += `None returned data: **RLS appears active** on the probed tables. `;
+      md += `Note: this does not prove every table is protected, only the ones reached.\n\n`;
     }
     md += `---\n\n`;
   }

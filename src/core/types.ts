@@ -23,7 +23,11 @@ export interface Finding {
   meta?: { table?: string };
 }
 
+/** A public BaaS config recovered from the client bundle so its data API can be probed. */
 export interface SupabaseConfig {
   projectUrl: string;
+  /** The public key used to probe: an anon JWT or an `sb_publishable_`/`sb_secret_` key. */
   anonKey: string | null;
+  /** How the probe key was classified, for reporting. */
+  keyKind?: 'anon-jwt' | 'publishable' | 'secret';
 }

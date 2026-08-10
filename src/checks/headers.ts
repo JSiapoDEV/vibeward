@@ -1,4 +1,4 @@
-import type { Finding, Severity } from './types.js';
+import type { Finding, Severity } from '../core/types.js';
 
 interface ExpectedHeader {
   header: string;

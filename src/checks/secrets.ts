@@ -1,4 +1,4 @@
-import type { Finding, Severity, SupabaseConfig } from './types.js';
+import type { Finding, Severity, SupabaseConfig } from '../core/types.js';
 
 interface SecretPattern {
   id: string;
@@ -38,6 +38,9 @@ function mask(s: string): string {
 }
 
 const JWT_RE = /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
+// New-format Supabase keys (2025+): sb_publishable_ is public; sb_secret_ bypasses RLS.
+const SB_PUBLISHABLE_RE = /\bsb_publishable_[A-Za-z0-9_-]{20,}\b/;
+const SB_SECRET_RE = /\bsb_secret_[A-Za-z0-9_-]{20,}\b/;
 
 export const SECRET_PATTERNS: SecretPattern[] = [
   {
@@ -52,6 +55,22 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     exploit:
       'The service_role key is in the client bundle. Anyone can extract it and hit the Supabase REST/GraphQL API with full privileges, bypassing every RLS policy — read, modify or delete any table.',
     why: 'This is the single most dangerous exposure possible. It grants total database access to anyone who views the page, regardless of your security rules. Rotate it today.',
+    references: [
+      CWE_798,
+      'https://supabase.com/docs/guides/api/api-keys',
+      'https://nvd.nist.gov/vuln/detail/CVE-2025-48757',
+    ],
+  },
+  {
+    id: 'supabase_secret_key',
+    label: 'Supabase secret key (sb_secret_) in the client',
+    severity: 'critical',
+    check: 6,
+    cwe: 'CWE-798',
+    regex: new RegExp(SB_SECRET_RE.source, 'g'),
+    exploit:
+      'sb_secret_ is the new-format service key: it bypasses every RLS policy. Anyone who reads the bundle gets full read/write/delete on the database through the REST/GraphQL API.',
+    why: 'The most dangerous exposure possible — total database access regardless of your policies. Rotate it now and keep it server-side only.',
     references: [
       CWE_798,
       'https://supabase.com/docs/guides/api/api-keys',
@@ -131,6 +150,33 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     references: [CWE_798],
   },
   {
+    id: 'slack_token',
+    label: 'Slack token',
+    severity: 'high',
+    check: 2,
+    cwe: 'CWE-798',
+    regex: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+    exploit:
+      'A Slack token can read and post messages, list users and channels, and exfiltrate workspace data at its granted scope.',
+    why: 'Revoke it in the Slack app settings and rotate.',
+    references: [CWE_798],
+  },
+  {
+    id: 'db_connection_string',
+    label: 'Database connection string with credentials',
+    severity: 'critical',
+    check: 1,
+    cwe: 'CWE-798',
+    regex:
+      /\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss):\/\/[^\s:'"]+:[^\s@'"]+@[^\s/'"]+/gi,
+    validate: (match) =>
+      /:(your|password|pass|user)@/i.test(match) ? null : { snippet: mask(match) },
+    exploit:
+      'A full connection string embeds the database host, user and password — anyone reading it can connect directly and read or modify the entire database.',
+    why: 'Move it to a server-side environment variable and rotate the credential. It must never reach the client or the repo.',
+    references: [CWE_798],
+  },
+  {
     id: 'resend_key',
     label: 'Resend API key',
     severity: 'high',
@@ -198,14 +244,16 @@ export const SECRET_PATTERNS: SecretPattern[] = [
   },
 ];
 
+function evidenceOf(raw: string, extra: Record<string, string>): string {
+  return extra.snippet ?? extra.key ?? (extra.role ? `JWT role=${extra.role}` : mask(raw));
+}
+
 function buildFinding(
   pat: SecretPattern,
   raw: string,
   extra: Record<string, string>,
   source: string,
 ): Finding {
-  const evidence =
-    extra.snippet ?? extra.key ?? (extra.role ? `JWT role=${extra.role}` : mask(raw));
   return {
     id: pat.id,
     label: pat.label,
@@ -213,7 +261,7 @@ function buildFinding(
     check: pat.check,
     cwe: pat.cwe,
     source,
-    evidence,
+    evidence: evidenceOf(raw, extra),
     exploit: pat.id === 'generic_secret_assign' ? pat.exploit : `${BUNDLE_EXPLOIT} ${pat.exploit}`,
     why: pat.why,
     references: pat.references,
@@ -267,20 +315,48 @@ export function scanSource(text: string, relPath: string): Finding[] {
   return out;
 }
 
-/** Extracts the public Supabase project URL and anon key so RLS can be probed later. */
+/**
+ * Scans data returned by an open API (e.g. a readable table row) for live third-party
+ * secrets users pasted into content — the Moltbook pattern (OpenAI keys inside DMs).
+ * The framing differs from a bundle leak: the secret is in world-readable data.
+ */
+export function scanReturnedData(text: string, source: string): Finding[] {
+  const out: Finding[] = [];
+  for (const { pat, raw, extra } of matchSecrets(text)) {
+    if (pat.id === 'generic_secret_assign') continue; // too noisy against arbitrary row JSON
+    out.push({
+      id: `data_${pat.id}`,
+      label: `${pat.label.replace(/ in the client$/, '')} exposed in readable data`,
+      severity: pat.severity,
+      check: pat.check,
+      cwe: pat.cwe,
+      source,
+      evidence: evidenceOf(raw, extra),
+      exploit: `A live secret sits in a database row readable without authentication. ${pat.exploit}`,
+      why: 'World-readable user content contains a real third-party secret, so the breach extends to that provider. Redact secrets server-side and rotate the exposed one.',
+      references: pat.references,
+    });
+  }
+  return out;
+}
+
+/** Extracts the public Supabase project URL and a probe key (anon JWT / publishable / secret). */
 export function extractSupabaseConfig(text: string): SupabaseConfig | null {
   const urlMatch = text.match(/https:\/\/([a-z0-9]{20})\.supabase\.co/);
   if (!urlMatch) return null;
-
   const projectUrl = `https://${urlMatch[1]}.supabase.co`;
-  let anonKey: string | null = null;
+
+  // Prefer an anon JWT; fall back to the new-format publishable key; then secret.
   const jwtRe = new RegExp(JWT_RE.source, 'g');
   let jm: RegExpExecArray | null;
   while ((jm = jwtRe.exec(text)) !== null) {
     if (decodeJwtRole(jm[0]) === 'anon') {
-      anonKey = jm[0];
-      break;
+      return { projectUrl, anonKey: jm[0], keyKind: 'anon-jwt' };
     }
   }
-  return { projectUrl, anonKey };
+  const pub = text.match(SB_PUBLISHABLE_RE);
+  if (pub) return { projectUrl, anonKey: pub[0], keyKind: 'publishable' };
+  const sec = text.match(SB_SECRET_RE);
+  if (sec) return { projectUrl, anonKey: sec[0], keyKind: 'secret' };
+  return { projectUrl, anonKey: null };
 }

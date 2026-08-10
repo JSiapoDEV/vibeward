@@ -1,17 +1,16 @@
 {
   "name": "vibeward",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Security scanner for AI-generated / vibe-coded apps (Lovable, Bolt, v0, Supabase). Finds exposed secrets, missing RLS and insecure headers. Read-only, authorized use.",
   "type": "module",
   "bin": {
-    "vibeward": "dist/scan.js"
+    "vibeward": "dist/cli.js"
   },
-  "main": "dist/scan.js",
-  "types": "dist/scan.d.ts",
+  "main": "dist/cli.js",
+  "types": "dist/cli.d.ts",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsx src/scan.ts",
-    "demo": "tsx src/demo.ts",
+    "build": "rm -rf dist && tsc",
+    "dev": "tsx src/cli.ts",
     "test": "tsx test/self-test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -37,7 +36,7 @@
     "type": "git",
     "url": "git+https://github.com/JSiapoDEV/vibeward.git"
   },
-  "homepage": "https://github.com/JSiapoDEV/vibeward#readme",
+  "homepage": "https://vibeward.ai",
   "bugs": {
     "url": "https://github.com/JSiapoDEV/vibeward/issues"
   },

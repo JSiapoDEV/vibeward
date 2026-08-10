@@ -1,7 +1,12 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, extname, basename } from 'node:path';
-import { scanSource } from './secrets.js';
-import type { Finding } from './types.js';
+import { join, relative, extname, basename, sep } from 'node:path';
+import { scanSource } from '../checks/secrets.js';
+import { scanBackendFile } from '../checks/backend.js';
+import { analyzeMigrations } from '../checks/migrations.js';
+import { finish, loadSupabaseExport } from '../reporters/output.js';
+import { C } from '../core/terminal.js';
+import type { Args } from '../core/args.js';
+import type { Finding } from '../core/types.js';
 
 const IGNORE_DIRS = new Set([
   'node_modules',
@@ -30,7 +35,17 @@ const SCAN_EXT = new Set([
   '.astro',
   '.html',
   '.json',
+  '.py',
+  '.rb',
+  '.go',
+  '.php',
+  '.java',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.sh',
 ]);
+const SCAN_FILE = new Set(['Dockerfile', 'dockerfile', 'Procfile']);
 const MAX_FILE = 2_000_000; // skip files larger than 2 MB
 const ENV_SAFE = /\.env\.(example|sample|template)$/i;
 
@@ -38,6 +53,8 @@ export interface FolderScan {
   findings: Finding[];
   filesScanned: number;
   migrations: { path: string; content: string }[];
+  /** Whether the project looks like a Supabase (direct-to-DB) app vs a server+ORM app. */
+  supabaseContext: boolean;
 }
 
 function collectFiles(dir: string): string[] {
@@ -77,11 +94,14 @@ export function scanFolder(root: string): FolderScan {
   const findings: Finding[] = [];
   const migrations: { path: string; content: string }[] = [];
   let filesScanned = 0;
+  let supabaseContext = false;
 
   for (const file of collectFiles(root)) {
     const rel = relative(root, file);
     const base = basename(file);
     const ext = extname(file);
+
+    if (rel.includes(`supabase${sep}`)) supabaseContext = true;
 
     if (ext === '.sql') {
       const content = read(file);
@@ -90,13 +110,21 @@ export function scanFolder(root: string): FolderScan {
     }
 
     const isEnv = base === '.env' || (base.startsWith('.env') && !ENV_SAFE.test(base));
-    if (!SCAN_EXT.has(ext) && !isEnv) continue;
+    if (!SCAN_EXT.has(ext) && !SCAN_FILE.has(base) && !isEnv) continue;
 
     const content = read(file);
     if (content === null) continue;
     filesScanned++;
 
+    if (
+      (base === 'package.json' && content.includes('@supabase')) ||
+      content.includes('.supabase.co')
+    ) {
+      supabaseContext = true;
+    }
+
     findings.push(...scanSource(content, rel));
+    findings.push(...scanBackendFile(rel, content));
 
     if (isEnv) {
       findings.push({
@@ -115,5 +143,30 @@ export function scanFolder(root: string): FolderScan {
     }
   }
 
-  return { findings, filesScanned, migrations };
+  return { findings, filesScanned, migrations, supabaseContext };
+}
+
+/** White-box: scan a local folder (code + Supabase migrations) plus an optional export. */
+export function runFolderScan(dir: string, args: Args): never {
+  console.log(`${C.gray}▸ Scanning folder ${dir}…${C.reset}`);
+  const { findings, filesScanned, migrations, supabaseContext } = scanFolder(dir);
+  console.log(
+    `${C.gray}▸ ${filesScanned} file(s) scanned, ${migrations.length} SQL file(s) found${C.reset}`,
+  );
+  const scanned = [
+    `Source files in ${dir} (secrets, committed .env, Next.js headers, server-action auth, formula injection)`,
+  ];
+
+  if (migrations.length) {
+    findings.push(...analyzeMigrations(migrations, { supabaseContext }));
+    scanned.push(
+      `Supabase/SQL migrations (RLS, permissive policies, SECURITY DEFINER, anon grants)`,
+    );
+  }
+  if (args.supabaseJson) {
+    findings.push(...loadSupabaseExport(args.supabaseJson));
+    scanned.push('Live Supabase audit export (--supabase)');
+  }
+
+  finish(dir, findings, null, scanned, args);
 }

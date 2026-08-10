@@ -33,21 +33,22 @@ const RULES: IntentRule[] = [
   },
   {
     id: 'service-role-client',
-    risk: 'Putting the service_role key in the client',
+    risk: 'Putting a secret/service key in the client',
     patterns: [
-      /service[-_\s]?role[^.]{0,40}\b(client|frontend|front[-\s]?end|browser|react|next|vue)\b/i,
-      /\b(client|frontend|browser)\b[^.]{0,40}service[-_\s]?role/i,
-      /service[-_\s]?(role|key)[^.]{0,30}\b(expose|public)\b/i,
+      /(service[-_\s]?(role|key)|sb_secret|admin\s*key|master\s*key)[^.]{0,40}\b(client|frontend|front[-\s]?end|browser|react|next|vue)\b/i,
+      /\b(client|frontend|browser)\b[^.]{0,40}(service[-_\s]?(role|key)|sb_secret|admin\s*key)/i,
+      /(service[-_\s]?(role|key)|sb_secret)[^.]{0,30}\b(expose|public)\b/i,
     ],
-    why: 'The service_role key bypasses ALL Row-Level Security. In client code, anyone can extract it and read, modify or delete any table. It is the most dangerous key you have.',
+    why: 'The service_role / sb_secret key bypasses ALL Row-Level Security. In client code, anyone can extract it and read, modify or delete any table. It is the most dangerous key you have.',
     instead:
-      'Use the anon key + RLS in the client. Do privileged work on the server (an Edge Function or backend) where the service_role key never reaches the browser.',
+      'Use the anon / publishable key + RLS in the client. Do privileged work on the server (an Edge Function or backend) where the secret key never reaches the browser.',
   },
   {
     id: 'make-public',
     risk: 'Making data or a bucket public to debug',
     patterns: [
       /\bmake\b[^.]{0,25}\b(it|the\s+\w+|table|bucket|data|api)\b[^.]{0,15}\bpublic\b/i,
+      /\b(set|turn)\b[^.]{0,20}\b(table|bucket|data)\b[^.]{0,15}\bpublic\b/i,
       /\ballow\s+public\s+(access|read|write)\b/i,
       /\b(haz|hacer|pon)\b[^.]{0,20}\bp[úu]blic/i,
     ],

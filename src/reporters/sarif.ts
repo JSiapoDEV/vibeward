@@ -1,4 +1,4 @@
-import type { Finding, Severity } from './types.js';
+import type { Finding, Severity } from '../core/types.js';
 
 // Minimal SARIF 2.1.0 so findings show up in GitHub code scanning (Security tab).
 

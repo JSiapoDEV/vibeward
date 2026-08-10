@@ -1,4 +1,4 @@
-import type { Finding } from './types.js';
+import type { Finding } from '../core/types.js';
 
 export interface SqlFile {
   path: string;
@@ -14,15 +14,33 @@ const ENABLE_RLS =
   /alter\s+table\s+(?:public\.)?["'`]?(\w+)["'`]?\s+enable\s+row\s+level\s+security/gi;
 const PERMISSIVE_POLICY = /create\s+policy[\s\S]{0,240}?using\s*\(\s*true\s*\)/gi;
 const SECURITY_DEFINER = /security\s+definer/gi;
+const GRANT_TO_ANON =
+  /grant\s+([\w, ]+?)\s+on\s+(?:table\s+)?(?:public\.)?["'`]?(\w+)["'`]?\s+to\s+(anon|public)\b/gi;
+
+/** True when the migration set uses the RLS model at all (so a table missing it is a real gap). */
+function usesRlsModel(files: SqlFile[]): boolean {
+  return files.some((f) =>
+    /enable\s+row\s+level\s+security|create\s+policy|\bto\s+(anon|authenticated)\b/i.test(
+      f.content,
+    ),
+  );
+}
 
 /**
- * Best-effort static analysis of Supabase/Postgres migrations. Flags tables created
- * without RLS, permissive `USING (true)` policies, and SECURITY DEFINER functions.
+ * Best-effort static analysis of Supabase/Postgres migrations. Flags permissive
+ * `USING (true)` policies, SECURITY DEFINER functions, and anon/public grants always;
+ * flags tables created without RLS **only** when the app actually uses the RLS model
+ * (`supabaseContext`, or the migrations reference RLS). A plain Prisma/Drizzle app whose
+ * DB sits behind the server does not expose tables directly, so "no RLS" is not a finding.
  */
-export function analyzeMigrations(files: SqlFile[]): Finding[] {
+export function analyzeMigrations(
+  files: SqlFile[],
+  { supabaseContext = false }: { supabaseContext?: boolean } = {},
+): Finding[] {
   const findings: Finding[] = [];
   const created = new Map<string, { path: string; line: number }>();
   const rlsEnabled = new Set<string>();
+  const flagMissingRls = supabaseContext || usesRlsModel(files);
 
   for (const { path, content } of files) {
     let m: RegExpExecArray | null;
@@ -69,10 +87,30 @@ export function analyzeMigrations(files: SqlFile[]): Finding[] {
         references: ['https://cwe.mitre.org/data/definitions/269.html'],
       });
     }
+
+    GRANT_TO_ANON.lastIndex = 0;
+    while ((m = GRANT_TO_ANON.exec(content)) !== null) {
+      const privileges = m[1]!.replace(/\s+/g, ' ').trim();
+      const writes = /\b(insert|update|delete|all)\b/i.test(privileges);
+      findings.push({
+        id: `grant_anon_${m[2]!.toLowerCase()}`,
+        label: `Table \`${m[2]}\` grants ${writes ? 'write ' : ''}access to the ${m[3]!.toLowerCase()} role`,
+        severity: writes ? 'high' : 'medium',
+        check: 6,
+        cwe: 'CWE-863',
+        source: `${path}:${lineAt(content, m.index)}`,
+        evidence: m[0].replace(/\s+/g, ' ').slice(0, 120),
+        exploit: writes
+          ? 'Granting INSERT/UPDATE/DELETE to anon lets any unauthenticated visitor write to the table through the public REST API, even with RLS on if no WITH CHECK policy constrains it.'
+          : 'Granting table privileges to the anon/public role widens what an unauthenticated caller can reach.',
+        why: 'The anon and public roles are reachable by anyone with the public key. Grant table privileges deliberately and rely on RLS policies with `WITH CHECK` for writes.',
+        references: ['https://supabase.com/docs/guides/database/postgres/row-level-security'],
+      });
+    }
   }
 
   for (const [name, loc] of created) {
-    if (!rlsEnabled.has(name)) {
+    if (flagMissingRls && !rlsEnabled.has(name)) {
       findings.push({
         id: `rls_disabled_${name}`,
         label: `Table \`${name}\` created without Row Level Security`,
