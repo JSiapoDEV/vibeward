@@ -40,9 +40,16 @@ The platforms tell you securing the data is *your* responsibility. `vibeward` is
    publicly listable Storage bucket.
 4. **Source maps & HTTP headers** — exposed `.map` files, plus CSP, HSTS, X-Frame-Options,
    X-Content-Type-Options, and technology leaks.
+5. **Server-rendered stacks** (Next.js + Prisma/Drizzle) — missing security headers in
+   `next.config`, server actions and route handlers that mutate data with no auth guard, and
+   formula injection in Excel/CSV exports.
 
-By default the scan is strictly read-only. Server-side checks (authorization/IDOR, input
-validation, rate limiting, backups) are covered by the manual part of an audit.
+By default the scan is strictly read-only. `--passive` narrows it further, to only the assets a
+browser already downloads (bundles and headers) with no data probing at all — that is the mode to
+use when you are looking at an app whose owner has not authorized a full scan yet.
+
+The deeper server-side classes (IDOR/BOLA behind a login, rate limiting, orphaned datastores,
+business logic) are **not** claimed by an automated scan — they are the manual part of an audit.
 
 ## Run it
 
@@ -85,6 +92,7 @@ Beyond the guardrail, vibeward also scans finished code — the backstop.
 
 ```bash
 vibeward https://client-app.lovable.app
+vibeward https://client-app.lovable.app --passive   # public assets only, no data probing
 ```
 
 **White-box** (from the code) is the deep audit — it reads the actual folder (a git repo, a
@@ -113,6 +121,8 @@ vibeward scan ./client-app --supabase result.json   # 2. fold the export into th
 
 | Flag | Description |
 |---|---|
+| `--passive` | URL mode: read only public assets (bundles, headers) — no data probing |
+| `--write-test` | URL mode: opt-in, non-mutating check for unauthenticated writes |
 | `--supabase <file.json>` | Fold in a Supabase audit export (from `supabase-sql`) |
 | `--supabase-url <url>` / `--anon-key <key>` | URL mode: Supabase config if not auto-detected |
 | `--no-rls` | URL mode: skip the Row-Level Security probe |
@@ -139,7 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: JSiapoDEV/vibeward@v1
+      - uses: JSiapoDEV/vibeward@v0.2.0
         with:
           path: '.'
           # supabase: audit.json   # optional: a committed Supabase export
@@ -171,6 +181,7 @@ src/
     supabase.ts        table enumeration, RLS/write probe, GraphQL, audit export
     firebase.ts        RTDB + Storage exposure
     migrations.ts      SQL migration analysis
+    backend.ts         Next.js/Prisma: headers, unguarded mutations, export injection
     headers.ts         security headers
     sourcemaps.ts      exposed source maps
     intent.ts          guardrail intent rules
