@@ -1,5 +1,5 @@
 name: 'vibeward'
-description: 'Security scan for AI-generated / vibe-coded apps (Supabase, Lovable, MCP). Uploads results to the GitHub Security tab.'
+description: 'Security & website-quality scan for AI-generated / vibe-coded apps and sites (Supabase, Lovable, MCP). Uploads results to the GitHub Security tab.'
 branding:
   icon: 'shield'
   color: 'green'
@@ -9,6 +9,10 @@ inputs:
     description: 'Folder to scan'
     required: false
     default: '.'
+  url:
+    description: 'Live URL to scan instead of the folder (adds the website quality / AI-visibility checks)'
+    required: false
+    default: ''
   supabase:
     description: 'Path to a Supabase audit export JSON (see `vibeward supabase-sql`)'
     required: false
@@ -29,7 +33,11 @@ runs:
     - name: Run vibeward
       shell: bash
       run: |
-        ARGS="scan ${{ inputs.path }} --sarif vibeward.sarif --yes"
+        if [ -n "${{ inputs.url }}" ]; then
+          ARGS="${{ inputs.url }} --sarif vibeward.sarif --yes"
+        else
+          ARGS="scan ${{ inputs.path }} --sarif vibeward.sarif --yes"
+        fi
         if [ -n "${{ inputs.supabase }}" ]; then ARGS="$ARGS --supabase ${{ inputs.supabase }}"; fi
         set +e
         npx --yes vibeward@latest $ARGS

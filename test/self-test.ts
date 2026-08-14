@@ -23,6 +23,24 @@ import {
   checkServerActionAuth,
   checkExportFormulaInjection,
 } from '../src/checks/backend.js';
+import {
+  parsePage,
+  fingerprintStack,
+  robotsBlocksAI,
+  analyzeRobots,
+  checkWeb,
+  WEB_CHECKS,
+} from '../src/checks/web.js';
+import {
+  normalizePageUrl,
+  discoverInternalLinks,
+  parseSitemapUrls,
+  discoverAssets,
+  looksLikeSamePage,
+} from '../src/http/crawl.js';
+import type { SiteFiles } from '../src/http/crawl.js';
+import type { Finding } from '../src/core/types.js';
+import { parseConfig, applySuppressions, notApplicableChecks } from '../src/core/config.js';
 
 let pass = 0;
 let fail = 0;
@@ -498,6 +516,603 @@ console.log('\n18. Server-side backend checks (framework + ORM archetype)');
     ) === null,
     'no flag when sanitization is hinted',
   );
+}
+
+// ---------------------------------------------------------------------------
+// Website quality / AI visibility (synthetic HTML, no network)
+// ---------------------------------------------------------------------------
+
+/** A page that does everything right — the baseline that must produce zero findings. */
+function goodHtml(path: string, title: string): string {
+  const body = 'Texto real y visible que un crawler lee sin ejecutar JavaScript. '.repeat(6);
+  return `<!doctype html>
+<html lang="es">
+<head>
+<title>${title}</title>
+<meta name="description" content="Una descripcion real y especifica de esta pagina, escrita para alguien que decide si hacer clic.">
+<link rel="canonical" href="https://x.test${path}">
+<link rel="icon" href="/favicon.svg">
+<meta property="og:title" content="${title}">
+<meta property="og:image" content="https://x.test/og.png">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Organization","name":"X"}</script>
+</head>
+<body><h1>${title}</h1><p>${body}</p><img src="/foto.jpg" alt="El equipo en la oficina"></body>
+</html>`;
+}
+
+/** The archetype: a Vite + React shell on a free subdomain with nothing in the HTML. */
+const SPA_HTML = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Vite + React</title></head>
+<body><div id="root"></div><script type="module" crossorigin src="/assets/index-a1b2c3d4.js"></script></body>
+</html>`;
+
+function goodFiles(over: Partial<SiteFiles> = {}): SiteFiles {
+  return {
+    robotsTxt: 'User-agent: *\nAllow: /\nSitemap: https://x.test/sitemap.xml',
+    llmsTxt: '# X\n> Lo que hace el sitio.',
+    sitemapXml: '<urlset><url><loc>https://x.test/</loc></url></urlset>',
+    faviconOk: true,
+    notFound: { status: 404, distinct: true },
+    ...over,
+  };
+}
+
+const emptyFiles: SiteFiles = {
+  robotsTxt: null,
+  llmsTxt: null,
+  sitemapXml: null,
+  faviconOk: false,
+  notFound: { status: 200, distinct: false },
+};
+
+const ids = (fs: Finding[]): string[] => fs.map((f) => f.id);
+
+console.log('\n19. Website — HTML parsing');
+{
+  const good = parsePage(goodHtml('/', 'Inicio'), 'https://x.test/');
+  assert(good.title === 'Inicio', 'reads the <title>');
+  assert(good.metaDescription !== null, 'reads the meta description');
+  assert(good.canonical === 'https://x.test/', 'reads the canonical URL');
+  assert(good.ogTitle !== null && good.ogImage !== null, 'reads the Open Graph tags');
+  assert(good.lang === 'es', 'reads lang from <html>');
+  assert(good.h1Count === 1, 'counts a single <h1>');
+  assert(good.jsonLdBlocks === 1, 'counts the JSON-LD block');
+  assert(good.imgTotal === 1 && good.imgWithoutAlt === 0, 'counts images with alt');
+  assert(good.faviconLink, 'sees the icon <link>');
+  assert(good.bodyTextLength > 200, 'measures the visible text');
+
+  const spa = parsePage(SPA_HTML, 'https://demo.vercel.app/');
+  assert(spa.metaDescription === null, 'SPA shell: no meta description');
+  assert(spa.lang === null, 'SPA shell: no lang');
+  assert(spa.h1Count === 0, 'SPA shell: no <h1>');
+  assert(spa.bodyTextLength < 200, 'SPA shell: empty view-source');
+
+  assert(
+    parsePage('<img src="/a.png" alt=""><img src="/b.png">', 'https://x.test/').imgWithoutAlt === 1,
+    'alt="" is decorative on purpose, only a MISSING alt counts',
+  );
+  assert(
+    parsePage('<!-- <title>Comentado</title> --><title>Real</title>', 'https://x.test/').title ===
+      'Real',
+    'ignores markup left inside an HTML comment',
+  );
+}
+
+console.log('\n20. Website — vibe-coded fingerprint');
+{
+  const fp = fingerprintStack(SPA_HTML, 'https://demo.vercel.app/', 2_000_000, emptyFiles);
+  assert(fp.platformDomain === 'vercel.app', 'detects the free platform subdomain');
+  assert(fp.framework === 'Vite + React', 'detects the Vite + React build');
+  assert(fp.clientRendered, 'flags the empty view-source as client-rendered');
+  assert(fp.score >= 8 && fp.total === 12, `scores the fingerprint high (${fp.score}/${fp.total})`);
+
+  const real = fingerprintStack(
+    goodHtml('/', 'Inicio'),
+    'https://midominio.com/',
+    90_000,
+    goodFiles(),
+  );
+  assert(real.platformDomain === null, 'a real domain is not a platform subdomain');
+  assert(!real.clientRendered, 'a page with content is not flagged as client-rendered');
+  assert(real.score === 0, `a well-built site scores 0 (got ${real.score})`);
+
+  assert(
+    fingerprintStack('<script src="/_next/static/x.js"></script>', 'https://x.test/', 0)
+      .framework === 'Next.js',
+    'detects Next.js',
+  );
+}
+
+console.log('\n21. Website — robots.txt blocking AI crawlers');
+{
+  assert(
+    robotsBlocksAI(null) === null || robotsBlocksAI(null).length === 0,
+    'no robots.txt => nothing blocked',
+  );
+  assert(
+    robotsBlocksAI('User-agent: GPTBot\nDisallow: /').includes('GPTBot'),
+    'flags an explicit Disallow: / for GPTBot',
+  );
+  assert(
+    robotsBlocksAI('User-agent: *\nDisallow: /').length >= 10,
+    'a wildcard Disallow: / blocks every watched AI crawler',
+  );
+  assert(
+    robotsBlocksAI('User-agent: GPTBot\nDisallow:').length === 0,
+    'an EMPTY Disallow allows everything — must not be a false positive',
+  );
+  assert(
+    robotsBlocksAI('User-agent: *\nDisallow: /admin\nAllow: /').length === 0,
+    'blocking only /admin does not block the AI crawlers',
+  );
+  {
+    const both = robotsBlocksAI('User-agent: GPTBot\nUser-agent: ClaudeBot\nDisallow: /');
+    assert(
+      both.includes('GPTBot') && both.includes('ClaudeBot'),
+      'consecutive User-agent lines share the same rule block',
+    );
+  }
+  {
+    const mixed = robotsBlocksAI('User-agent: *\nDisallow: /\n\nUser-agent: GPTBot\nAllow: /');
+    assert(
+      !mixed.includes('GPTBot') && mixed.includes('ClaudeBot'),
+      'a group naming the bot wins over the wildcard group',
+    );
+  }
+  assert(
+    robotsBlocksAI('<!doctype html><html><body>404</body></html>').length === 0,
+    'an SPA serving index.html for /robots.txt is not a robots policy',
+  );
+}
+
+console.log('\n22. Website — findings and aggregation');
+{
+  const clean = checkWeb({
+    pages: [
+      parsePage(goodHtml('/', 'Inicio'), 'https://x.test/'),
+      parsePage(goodHtml('/precios', 'Precios'), 'https://x.test/precios'),
+    ],
+    files: goodFiles(),
+    brokenAssets: [],
+    jsBytes: 120_000,
+    consoleErrors: [],
+  });
+  assert(
+    clean.length === 0,
+    `a well-built site produces zero findings (got ${ids(clean).join(', ')})`,
+  );
+
+  const spaPages = [
+    parsePage(SPA_HTML, 'https://demo.vercel.app/'),
+    parsePage(SPA_HTML, 'https://demo.vercel.app/precios'),
+  ];
+  const bad = checkWeb({
+    pages: spaPages,
+    files: emptyFiles,
+    brokenAssets: [
+      { url: 'https://demo.vercel.app/logo.png', status: 404, from: 'https://demo.vercel.app/' },
+    ],
+    jsBytes: 2_000_000,
+    consoleErrors: [{ type: 'pageerror', text: 'TypeError: x is not a function' }],
+  });
+  const badIds = ids(bad);
+  for (const id of [
+    'web_empty_html',
+    'web_broken_assets',
+    'web_console_errors',
+    'web_duplicate_titles',
+    'web_missing_meta_description',
+    'web_missing_og',
+    'web_missing_canonical',
+    'web_missing_structured_data',
+    'web_h1_structure',
+    'web_missing_sitemap',
+    'web_missing_llms_txt',
+    'web_missing_lang',
+    'web_missing_404',
+    'web_missing_favicon',
+    'web_heavy_bundle',
+  ]) {
+    assert(badIds.includes(id), `vibe-coded SPA => ${id}`);
+  }
+  assert(
+    bad.every((f) => f.kind === 'web'),
+    'every website finding is tagged kind: "web"',
+  );
+  assert(
+    bad.every((f) => f.check === undefined && f.cwe === undefined),
+    'website findings carry no security checklist item or CWE',
+  );
+  assert(
+    bad.every((f) => typeof f.fix === 'string' && f.fix.length > 0 && f.autofix !== undefined),
+    'every website finding carries a concrete fix and an autofix level — the agent contract',
+  );
+  assert(new Set(badIds).size === badIds.length, 'one finding per problem, never one per page');
+  assert(
+    WEB_CHECKS.every((c) => typeof c.label === 'string' && c.label.length > 0),
+    'WEB_CHECKS labels the full checklist so the report can show what passed',
+  );
+  assert(
+    badIds.every((id) => WEB_CHECKS.some((c) => c.id === id)),
+    'every emitted id is in WEB_CHECKS (otherwise the report silently drops it)',
+  );
+
+  // Playwright absent must never be reported as "the console is clean".
+  const noBrowser = checkWeb({
+    pages: spaPages,
+    files: emptyFiles,
+    brokenAssets: [],
+    jsBytes: 1000,
+    consoleErrors: null,
+  });
+  assert(
+    !ids(noBrowser).includes('web_console_errors'),
+    'consoleErrors === null (no Playwright) => no console finding, ever',
+  );
+
+  // A single page cannot prove titles are duplicated.
+  const onePage = checkWeb({
+    pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+    files: goodFiles(),
+    brokenAssets: [],
+    jsBytes: 1000,
+    consoleErrors: [],
+  });
+  assert(
+    !ids(onePage).includes('web_duplicate_titles'),
+    'one crawled page => never claims duplicate titles',
+  );
+
+  const realNotFound = checkWeb({
+    pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+    files: goodFiles({ notFound: { status: 404, distinct: true } }),
+    brokenAssets: [],
+    jsBytes: 1000,
+    consoleErrors: [],
+  });
+  assert(!ids(realNotFound).includes('web_missing_404'), 'a real 404 is not reported');
+}
+
+console.log('\n23. Website — crawl parsing (pure, no network)');
+{
+  const base = 'https://x.test/';
+  assert(normalizePageUrl('/about/', base) === 'https://x.test/about', 'drops the trailing slash');
+  assert(
+    normalizePageUrl('/a?utm_source=x&id=2', base) === 'https://x.test/a?id=2',
+    'drops utm_* but keeps real query params',
+  );
+  assert(normalizePageUrl('/a#top', base) === 'https://x.test/a', 'drops the hash');
+  assert(normalizePageUrl('mailto:a@b.c', base) === null, 'rejects mailto:');
+  assert(normalizePageUrl('#top', base) === null, 'rejects a bare anchor');
+  assert(normalizePageUrl('/manual.pdf', base) === null, 'rejects a file to download');
+
+  const html = `<a href="/precios">P</a><a href="https://otro.test/x">O</a><a href="/precios#faq">P2</a><a href="mailto:a@b.c">M</a>`;
+  const links = discoverInternalLinks(html, base, 8);
+  assert(
+    links.length === 1 && links[0] === 'https://x.test/precios',
+    'same-host links only, deduped',
+  );
+
+  const sitemap = `<urlset><url><loc>https://x.test/a</loc></url><url><loc>https://otro.test/b</loc></url></urlset>`;
+  assert(
+    parseSitemapUrls(sitemap, 'x.test', 8).join() === 'https://x.test/a',
+    'sitemap: same-host URLs only',
+  );
+
+  const assets = discoverAssets(
+    `<script src="/a.js"></script><link rel="canonical" href="/x"><link rel="stylesheet" href="/s.css"><img src="/i.png">`,
+    base,
+  );
+  assert(assets.includes('https://x.test/a.js'), 'finds script assets');
+  assert(assets.includes('https://x.test/s.css'), 'finds stylesheet assets');
+  assert(assets.includes('https://x.test/i.png'), 'finds image assets');
+  assert(!assets.includes('https://x.test/x'), 'a canonical link is not an asset to download');
+
+  assert(looksLikeSamePage('<html>hola</html>', '<html>hola</html>'), 'identical pages match');
+  assert(
+    !looksLikeSamePage('<html>hola</html>', `<html>${'contenido distinto '.repeat(50)}</html>`),
+    'clearly different pages do not match',
+  );
+}
+
+console.log('\n24. Isolation — website findings never gate security');
+{
+  const secCritical: Finding = {
+    id: 'x_critical',
+    label: 'Exposed service key',
+    severity: 'critical',
+    check: 2,
+    why: 'test',
+  };
+  const webMedium: Finding = {
+    id: 'web_missing_canonical',
+    label: 'Pages declare no canonical URL',
+    severity: 'medium',
+    kind: 'web',
+    why: 'test',
+    fix: '<link rel="canonical" href="https://x.test/" />',
+    autofix: 'auto',
+  };
+  const webHigh: Finding = {
+    id: 'web_robots_blocks_ai',
+    label: 'robots.txt blocks AI crawlers',
+    severity: 'high',
+    kind: 'web',
+    why: 'test',
+    fix: 'Allow: /',
+    autofix: 'auto',
+  };
+
+  const mixed = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-14',
+    findings: [secCritical, webMedium, webHigh],
+    rls: null,
+    scanned: ['test'],
+  });
+  assert(mixed.counts.critical === 1, 'security counts include the security finding');
+  assert(
+    mixed.counts.medium === 0 && mixed.counts.high === 0,
+    'security counts EXCLUDE website findings',
+  );
+  assert(
+    mixed.webCounts.medium === 1 && mixed.webCounts.high === 1,
+    'website findings are counted separately',
+  );
+  assert(
+    mixed.markdown.includes('Website quality & AI visibility'),
+    'the report gets its own website section',
+  );
+
+  const webOnly = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-14',
+    findings: [webMedium, webHigh],
+    rls: null,
+    scanned: ['test'],
+  });
+  assert(
+    webOnly.counts.critical === 0 && webOnly.counts.high === 0,
+    'a site with ONLY website findings has zero security severity (exit code stays 0)',
+  );
+  assert(
+    webOnly.verdict.startsWith('No critical findings'),
+    'website findings never change the security verdict',
+  );
+
+  const sarif = toSarif([secCritical, webMedium, webHigh], '0.3.0');
+  assert(sarif.includes('x_critical'), 'SARIF keeps the security finding');
+  assert(
+    !sarif.includes('web_missing_canonical') && !sarif.includes('web_robots_blocks_ai'),
+    'SARIF EXCLUDES website findings — the Security tab is for vulnerabilities',
+  );
+}
+
+console.log('\n25. Regressions caught by the adversarial review');
+{
+  // (a) The 200 KB window is for <head>. Body signals must see the whole document, or a
+  // Next.js RSC payload / inline critical CSS pushes the real <h1> out of view and the
+  // report tells a paying client their page has no heading.
+  const filler = `<script type="application/ld+json">${'"x",'.repeat(60000)}</script>`;
+  const huge = `<!doctype html><html lang="es"><head><title>T</title>${filler}</head>
+<body><h1>Catálogo</h1><img src="/a.png" alt="ok"><img src="/b.png"><p>${'texto '.repeat(60)}</p></body></html>`;
+  assert(huge.length > 200 * 1024, 'fixture is genuinely over the 200 KB head window');
+  const big = parsePage(huge, 'https://x.test/');
+  assert(big.h1Count === 1, 'counts an <h1> that sits past 200 KB (was reported as missing)');
+  assert(big.imgTotal === 2 && big.imgWithoutAlt === 1, 'counts images past 200 KB');
+  assert(big.bodyTextLength > 200, 'measures visible text past 200 KB');
+  assert(big.title === 'T', 'still reads the <head> signals');
+
+  // (b) Markup inside a <script> body is not markup.
+  const inlined = `<html><head><title>T</title></head><body>
+<script>const tpl = "<h1>fake</h1><img src=x>"; const other = '<h1>also fake</h1>';</script>
+<h1>Real</h1></body></html>`;
+  const parsed = parsePage(inlined, 'https://x.test/');
+  assert(parsed.h1Count === 1, 'does not count <h1> written inside a JS string');
+  assert(parsed.imgTotal === 0, 'does not count <img> written inside a JS string');
+
+  // (c) The robots source is measured, never inferred from how many bots are blocked.
+  const perBot = `${[
+    'GPTBot',
+    'OAI-SearchBot',
+    'ChatGPT-User',
+    'ClaudeBot',
+    'anthropic-ai',
+    'Claude-Web',
+    'PerplexityBot',
+    'CCBot',
+    'Google-Extended',
+    'Applebot-Extended',
+    'Bytespider',
+    'meta-externalagent',
+  ]
+    .map((b) => `User-agent: ${b}\nDisallow: /`)
+    .join('\n\n')}\n\nUser-agent: *\nAllow: /\nDisallow: /admin\n`;
+  const perBotVerdict = analyzeRobots(perBot);
+  assert(perBotVerdict.bots.length === 12, 'twelve per-bot blocks still block twelve bots');
+  assert(
+    !perBotVerdict.viaWildcard,
+    'twelve bots blocked one by one is NOT reported as a wildcard block',
+  );
+  assert(
+    !perBotVerdict.blockingAgents.includes('*'),
+    'a permissive User-agent: * is never named as the culprit',
+  );
+  const wildcardVerdict = analyzeRobots('User-agent: *\nDisallow: /');
+  assert(
+    wildcardVerdict.viaWildcard && wildcardVerdict.blockingAgents.join() === '*',
+    'a real wildcard block IS reported as one',
+  );
+  {
+    const f = checkWeb({
+      pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+      files: goodFiles({ robotsTxt: perBot }),
+      brokenAssets: [],
+      jsBytes: 1000,
+      consoleErrors: [],
+    }).find((x) => x.id === 'web_robots_blocks_ai');
+    assert(
+      f !== undefined && !f.evidence!.includes('User-agent: *'),
+      'the evidence never claims a `User-agent: *` line the file does not have',
+    );
+    assert(
+      f !== undefined && f.fix!.includes('delete this line only'),
+      'the auto-applied fix is surgical, it never hands over a whole replacement robots.txt',
+    );
+  }
+}
+
+console.log('\n26. vibeward.json — declared intent and suppressions');
+{
+  // (a) Only website checks can be silenced. Security is not negotiable by config file.
+  const bad = parseConfig(
+    JSON.stringify({
+      suppress: [
+        { id: 'supabase_service_role', reason: 'lo miramos luego' },
+        { id: 'web_missing_og', reason: 'landing privada' },
+        { id: 'web_missing_canonical' },
+        { id: 'web_typo_id', reason: 'x' },
+      ],
+    }),
+  );
+  assert(
+    bad.config.suppress?.length === 1 && bad.config.suppress[0]!.id === 'web_missing_og',
+    'only the valid website suppression survives',
+  );
+  assert(
+    bad.warnings.some((w) => w.includes('supabase_service_role') && w.includes('never security')),
+    'a security id is rejected loudly, never silently',
+  );
+  assert(
+    bad.warnings.some((w) => w.includes('web_missing_canonical') && w.includes('reason')),
+    'a suppression with no reason is rejected',
+  );
+  assert(
+    bad.warnings.some((w) => w.includes('web_typo_id')),
+    'a typo in an id is reported instead of looking like it worked',
+  );
+  assert(parseConfig('{ nope').warnings.length === 1, 'broken JSON warns instead of throwing');
+  assert(
+    parseConfig(JSON.stringify({ intent: { siteType: 'blog' } })).warnings.some((w) =>
+      w.includes('siteType'),
+    ),
+    'an unknown siteType is rejected',
+  );
+
+  // (b) A suppressed finding is moved aside, never dropped, and security is untouchable
+  // even if an id somehow got through validation.
+  const secret: Finding = { id: 'x', label: 'Secret', severity: 'critical', why: 'w' };
+  const og: Finding = {
+    id: 'web_missing_og',
+    label: 'OG',
+    severity: 'medium',
+    kind: 'web',
+    why: 'w',
+  };
+  const split = applySuppressions([secret, og], {
+    suppress: [
+      { id: 'web_missing_og', reason: 'landing privada' },
+      { id: 'x', reason: 'intento de silenciar seguridad' },
+    ],
+  });
+  assert(split.kept.length === 1 && split.kept[0] === secret, 'the security finding stays');
+  assert(
+    split.suppressed.length === 1 && split.suppressed[0]!.reason === 'landing privada',
+    'the website finding moves to `suppressed` with its reason attached',
+  );
+
+  // (c) The report must show a suppression, not hide it.
+  const report = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-14',
+    findings: [],
+    rls: null,
+    scanned: ['test'],
+    suppressed: split.suppressed,
+    configPath: '/repo/vibeward.json',
+  });
+  assert(
+    report.markdown.includes('1 suppression(s) in effect'),
+    'the executive summary warns that the scope was narrowed',
+  );
+  assert(
+    report.markdown.includes('Suppressed by configuration (1)') &&
+      report.markdown.includes('landing privada'),
+    'the suppressed check is listed with its declared reason',
+  );
+
+  // (d) Declaring intent does not mute the robots check — it inverts it.
+  const partial = `User-agent: GPTBot\nDisallow: /\n\nUser-agent: ClaudeBot\nDisallow: /\n`;
+  const declared = { intent: { aiCrawlers: 'blocked' as const } };
+  const na = notApplicableChecks(declared);
+  const blocked = checkWeb({
+    pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+    files: goodFiles({ robotsTxt: partial }),
+    brokenAssets: [],
+    jsBytes: 1000,
+    consoleErrors: [],
+    intent: declared.intent,
+    notApplicable: na,
+  });
+  const blockedIds = ids(blocked);
+  assert(
+    !blockedIds.includes('web_robots_blocks_ai'),
+    'declaring the block on purpose stops it being reported as a mistake',
+  );
+  assert(
+    blockedIds.includes('web_ai_block_incomplete'),
+    'and an INCOMPLETE block becomes the finding instead',
+  );
+  {
+    const f = blocked.find((x) => x.id === 'web_ai_block_incomplete')!;
+    assert(f.evidence!.includes('10 of 12'), 'it names how many crawlers still walk in');
+  }
+  assert(
+    !ids(
+      checkWeb({
+        pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+        files: goodFiles({ robotsTxt: 'User-agent: *\nDisallow: /' }),
+        brokenAssets: [],
+        jsBytes: 1000,
+        consoleErrors: [],
+        intent: declared.intent,
+        notApplicable: na,
+      }),
+    ).includes('web_ai_block_incomplete'),
+    'a complete block satisfies the declared intent',
+  );
+  assert(
+    notApplicableChecks({}).has('web_ai_block_incomplete'),
+    'without a declared intent the inverted check is "not applicable", never a silent pass',
+  );
+
+  // (e) siteType switches off a whole family with one line, and the report says why.
+  const internal = notApplicableChecks({ intent: { siteType: 'internal' } });
+  assert(
+    internal.has('web_missing_sitemap') && internal.has('web_missing_og'),
+    'an internal tool is not judged on discoverability',
+  );
+  assert(
+    !internal.has('web_missing_alt') && !internal.has('web_broken_assets'),
+    'but accessibility and broken assets still apply to an internal tool',
+  );
+  {
+    const md = buildReport({
+      target: 'https://x.test',
+      dateISO: '2026-08-14',
+      findings: [
+        { id: 'web_missing_lang', label: 'No lang', severity: 'medium', kind: 'web', why: 'w' },
+      ],
+      rls: null,
+      scanned: ['test'],
+      notApplicable: internal,
+    }).markdown;
+    assert(
+      md.includes('not applicable') && md.includes('internal tool'),
+      'the report shows "not applicable" with the reason, never a bare ✅',
+    );
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

@@ -1,7 +1,7 @@
 {
   "name": "vibeward",
-  "version": "0.2.0",
-  "description": "Security scanner for AI-generated / vibe-coded apps (Lovable, Bolt, v0, Supabase). Finds exposed secrets, missing RLS and insecure headers. Read-only, authorized use.",
+  "version": "0.3.0",
+  "description": "Scanner for AI-generated / vibe-coded apps and websites (Lovable, Bolt, v0, Supabase). Finds exposed secrets, missing RLS, insecure headers — and the SEO/AI-visibility gaps that give a vibe-coded site away. Read-only, authorized use.",
   "type": "module",
   "bin": {
     "vibeward": "dist/cli.js"
@@ -11,7 +11,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc",
     "dev": "tsx src/cli.ts",
-    "test": "tsx test/self-test.ts",
+    "test": "tsx test/self-test.ts && tsx test/prompt-test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -28,8 +28,21 @@
     "vibe-coding",
     "appsec",
     "devsecops",
-    "mcp"
+    "mcp",
+    "seo",
+    "seo-audit",
+    "llms-txt",
+    "ai-visibility",
+    "agent-skill"
   ],
+  "peerDependencies": {
+    "playwright": "*"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
+  },
   "author": "José Siapo (https://github.com/jsiapodev)",
   "license": "MIT",
   "repository": {

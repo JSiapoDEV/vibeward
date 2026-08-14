@@ -1,6 +1,9 @@
+import { isWeb } from '../core/types.js';
 import type { Finding, Severity } from '../core/types.js';
 
 // Minimal SARIF 2.1.0 so findings show up in GitHub code scanning (Security tab).
+// Web quality findings are deliberately excluded: that tab is for vulnerabilities,
+// and a missing favicon showing up next to an exposed key devalues both.
 
 const LEVEL: Record<Severity, 'error' | 'warning' | 'note'> = {
   critical: 'error',
@@ -33,24 +36,26 @@ function locationOf(source: string | undefined): SarifLocation | null {
 export function toSarif(findings: Finding[], version: string): string {
   const rules = new Map<string, { id: string; name: string; help: string; uri?: string }>();
 
-  const results = findings.map((f) => {
-    if (!rules.has(f.id)) {
-      rules.set(f.id, {
-        id: f.id,
-        name: f.label,
-        help: [f.why, f.exploit].filter(Boolean).join(' '),
-        uri: f.references?.[0],
-      });
-    }
-    const parts = [f.exploit, f.impact, f.why].filter(Boolean);
-    const loc = locationOf(f.source);
-    return {
-      ruleId: f.id,
-      level: LEVEL[f.severity],
-      message: { text: `${f.label}. ${parts.join(' ')}` },
-      ...(loc ? { locations: [loc] } : {}),
-    };
-  });
+  const results = findings
+    .filter((f) => !isWeb(f))
+    .map((f) => {
+      if (!rules.has(f.id)) {
+        rules.set(f.id, {
+          id: f.id,
+          name: f.label,
+          help: [f.why, f.exploit].filter(Boolean).join(' '),
+          uri: f.references?.[0],
+        });
+      }
+      const parts = [f.exploit, f.impact, f.why].filter(Boolean);
+      const loc = locationOf(f.source);
+      return {
+        ruleId: f.id,
+        level: LEVEL[f.severity],
+        message: { text: `${f.label}. ${parts.join(' ')}` },
+        ...(loc ? { locations: [loc] } : {}),
+      };
+    });
 
   const sarif = {
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json',

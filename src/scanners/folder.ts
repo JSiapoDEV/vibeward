@@ -4,7 +4,7 @@ import { scanSource } from '../checks/secrets.js';
 import { scanBackendFile } from '../checks/backend.js';
 import { analyzeMigrations } from '../checks/migrations.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
-import { C } from '../core/terminal.js';
+import { C, log } from '../core/terminal.js';
 import type { Args } from '../core/args.js';
 import type { Finding } from '../core/types.js';
 
@@ -148,9 +148,9 @@ export function scanFolder(root: string): FolderScan {
 
 /** White-box: scan a local folder (code + Supabase migrations) plus an optional export. */
 export function runFolderScan(dir: string, args: Args): never {
-  console.log(`${C.gray}▸ Scanning folder ${dir}…${C.reset}`);
+  log(`${C.gray}▸ Scanning folder ${dir}…${C.reset}`);
   const { findings, filesScanned, migrations, supabaseContext } = scanFolder(dir);
-  console.log(
+  log(
     `${C.gray}▸ ${filesScanned} file(s) scanned, ${migrations.length} SQL file(s) found${C.reset}`,
   );
   const scanned = [
