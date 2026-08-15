@@ -202,6 +202,16 @@ Use the installed binary here, not `npx vibeward@latest` — see [Run it](#run-i
 hook that runs on every prompt is the one place `@latest` is a bad trade. Update on your own
 schedule with `npm i -g vibeward@latest`.
 
+**How you find out there is a newer one.** A pinned copy could quietly rot, so it keeps track
+of its own age: past 60 days, the guard adds one line asking you to update — but only when it
+was already firing about something else, so a benign prompt never carries a maintenance notice.
+`vibeward init` and every scan say it too.
+
+It says *how old it is*, not *that an update exists*, because it never asks anyone. There is no
+version check, no ping, no daily request — the claim that vibeward makes no network call except
+to the target you name stays literally true, and a nudge that overstates what it actually
+checked is a nudge people learn to ignore.
+
 By default a risky request is **not blocked**. `UserPromptSubmit` is the one hook whose stdout is
 fed back into the model's context, so the guard exits `0` and injects the rule — the risk, why it
 matters, and the safe alternative — into the context of the agent that is about to act. Your prompt

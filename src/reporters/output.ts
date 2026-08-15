@@ -7,7 +7,7 @@ import type { RlsResult } from '../checks/supabase.js';
 import type { StackFingerprint } from '../checks/web.js';
 import type { Finding, SuppressedFinding } from '../core/types.js';
 import { C, log, todayISO } from '../core/terminal.js';
-import { VERSION } from '../core/version.js';
+import { VERSION, stalenessNotice } from '../core/version.js';
 
 /** The output-related flags a scanner passes through to `finish`. */
 export interface FinishOptions {
@@ -156,6 +156,9 @@ export function finish(
   log(`\n${C.green}✓ Report:${C.reset} ${outPath}`);
   if (opts.json) log(`${C.green}✓ JSON:${C.reset}   ${outPath.replace(/\.md$/, '')}.json`);
   if (opts.sarif) log(`${C.green}✓ SARIF:${C.reset}  ${opts.sarif}`);
+
+  const stale = stalenessNotice();
+  if (stale) log(`\n${C.yellow}⚠${C.reset} ${C.dim}${stale}${C.reset}`);
 
   log(
     `\n${C.dim}vibeward.ai${C.reset}  ${C.yellow}★${C.reset} ${C.dim}found this useful? star it:${C.reset} ${C.cyan}https://github.com/JSiapoDEV/vibeward${C.reset}\n`,

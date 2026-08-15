@@ -135,7 +135,15 @@ you need a hard stop, `--block` is there, and it is still not a boundary.
   and a hook command of `vibeward guard` means the code running on every prompt is a version
   you chose and can inspect. `@latest` re-resolves against the registry on every run, so any
   future publish executes on your machine without review — including a publish that is not
-  ours. See the README's install section.
+  ours. It also makes the guard's *availability* depend on the registry: with the network
+  down, `npx` hangs and then produces nothing, so the prompt goes through unguarded and
+  nothing says so. A stale guard still runs; an absent one does not. See the README's install
+  section.
+- **Update deliberately, and know when to.** A pinned copy tracks its own age and asks you to
+  update once it is over 60 days old. It does that offline, from a build date, and never asks
+  a server — so it can tell you it is old, but not that a specific fix has shipped. When a
+  security fix goes out it is announced in the GitHub advisory and the release notes; watch
+  the repository if you want that the day it happens.
 - **Reports contain secrets.** A finding quotes the key it found. Treat `report.md`, the
   JSON payload and the SARIF file as sensitive: do not commit them, and do not paste one
   into a public issue without redacting. If you need to share a finding with us, redact the

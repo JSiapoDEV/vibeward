@@ -1,5 +1,6 @@
 import { scanIntent, type IntentFinding } from '../checks/intent.js';
 import { C, readStdin } from '../core/terminal.js';
+import { stalenessNotice } from '../core/version.js';
 
 /**
  * Two ways to answer a risky prompt, and the default matters more than it looks.
@@ -34,6 +35,14 @@ function contextNote(risks: IntentFinding[]): string {
     lines.push(`DO INSTEAD: ${r.instead}`);
     lines.push('');
   }
+  // Only ever rides along with a real match. Appending it to every prompt would put a
+  // maintenance notice into the context of thousands of unrelated conversations, which is
+  // how a useful nudge turns into noise the model learns to skip.
+  const stale = stalenessNotice();
+  if (stale) {
+    lines.push(`ALSO TELL THE USER, ONCE, IN ONE LINE: ${stale}`);
+    lines.push('');
+  }
   lines.push('</vibeward-security-guardrail>');
   return lines.join('\n');
 }
@@ -66,7 +75,8 @@ export async function runGuard(mode: GuardMode): Promise<never> {
 
   if (mode === 'block') {
     // exit 2 blocks the prompt in a UserPromptSubmit hook; the message is stderr.
-    console.error(blockMessage(risks));
+    const stale = stalenessNotice();
+    console.error(blockMessage(risks) + (stale ? `${C.dim}${stale}${C.reset}\n` : ''));
     process.exit(2);
   }
 

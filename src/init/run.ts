@@ -9,6 +9,7 @@ import { dirname, sep } from 'node:path';
 import type { Choice } from '../core/prompt.js';
 import { isInteractive, multiselect, select } from '../core/prompt.js';
 import { C, confirm, log } from '../core/terminal.js';
+import { stalenessNotice } from '../core/version.js';
 import { resolveGuard, upgradeGuardCommand } from './binary.js';
 import type { RenderContext } from './templates.js';
 import { HOOK_EVENT, MARK, MARKER_END, MARKER_START, guardHook } from './templates.js';
@@ -426,6 +427,12 @@ export async function runInit(opts: InitOptions): Promise<never> {
   log(
     `\n${C.bold}vibeward init${C.reset} ${C.dim}— install the audit-and-fix skill into your AI tools${C.reset}\n`,
   );
+
+  // Before anything is written, not after: the files this run is about to generate are
+  // frozen copies of this version's templates, so installing from a stale binary bakes the
+  // staleness into disk.
+  const stale = stalenessNotice();
+  if (stale) log(`${C.yellow}⚠${C.reset} ${C.dim}${stale}${C.reset}\n`);
 
   const needsScope = !opts.scope;
   const needsTargets = !opts.all && (opts.targets?.length ?? 0) === 0;

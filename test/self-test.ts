@@ -48,6 +48,7 @@ import {
   upgradeGuardCommand,
 } from '../src/init/binary.js';
 import { guardHookJson } from '../src/init/templates.js';
+import { RELEASED, VERSION, ageInDays, stalenessNotice } from '../src/core/version.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -1201,6 +1202,35 @@ console.log('\n27. Guard hook command — never @latest in a settings.json');
     upgradeGuardCommand('npx vibeward@0.3.0 guard', 'vibeward guard') === null,
     'a pin the user chose is theirs to raise, not ours',
   );
+}
+
+console.log('\n28. Staleness notice — a pinned copy that knows its own age');
+{
+  const day = 24 * 60 * 60 * 1000;
+  const released = Date.parse(`${RELEASED}T00:00:00Z`);
+  const at = (days: number): Date => new Date(released + days * day);
+
+  assert(ageInDays(at(0)) === 0, 'a fresh build is 0 days old');
+  assert(ageInDays(at(45)) === 45, 'age counts whole days');
+  assert(ageInDays(new Date(), 'not-a-date') === null, 'an unparseable date is null, not NaN');
+
+  assert(stalenessNotice(at(0)) === null, 'says nothing on release day');
+  assert(stalenessNotice(at(59)) === null, 'says nothing at 59 days');
+  assert(stalenessNotice(at(60)) !== null, 'speaks up at 60 days');
+
+  const old = stalenessNotice(at(200)) ?? '';
+  assert(old.includes('6 months'), 'reports the age in months once it is months');
+  assert(old.includes(VERSION) && old.includes(RELEASED), 'names the version and its date');
+  assert(old.includes('npm i -g vibeward@latest'), 'gives the one command that fixes it');
+  // It has no network, so it must not pretend to know a newer version exists.
+  assert(
+    !/new(er)? version (is )?available/i.test(old),
+    'claims only what it can know offline: its own age, not that an update exists',
+  );
+
+  // The constant is hand-maintained next to VERSION. These catch the two ways that rots.
+  assert(ageInDays() !== null, 'RELEASED in the shipped build actually parses');
+  assert((ageInDays() ?? -1) >= 0, 'RELEASED is not in the future');
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);
