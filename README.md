@@ -38,15 +38,49 @@ give a vibe-coded site away.
 
 ## Why this exists
 
-The failure is documented, not hypothetical:
+The failure is documented, not hypothetical — with the caveats attached, because all three of
+these are usually cited badly:
 
-- **CVE-2025-48757** (CVSS **9.3**) — insufficient Supabase RLS in Lovable let unauthenticated
-  attackers read/write arbitrary tables. **170 of 1,645 analyzed projects (10.3%)** were vulnerable.
-- **Moltbook (2026)** — a vibe-coded app with no RLS policies and a public key in the client bundle
-  exposed **~1.5M auth tokens and 35,000 emails**.
-- **Veracode (2025)** — AI-generated code introduced security flaws in **45% of tests**.
+- **[CVE-2025-48757][cve]** — insufficient Row-Level Security in Lovable-generated sites let
+  unauthenticated attackers read or write arbitrary tables, "through 2025-04-15". The **9.3
+  Critical is CVSS v3.1 assigned by the CNA (MITRE)**, not by NVD: NVD never ran a primary
+  analysis, the record is *Deferred* there, and 9.3 appears as a Secondary metric. The record is
+  also formally **DISPUTED** — the vendor's position, quoted inside the CVE text, is that each
+  customer owns their own app's data. The much-repeated **"170 of 1,645 projects (10.3%)"** is in
+  neither the CVE nor NVD: its only primary source is [the reporter's own write-up][cve-statement],
+  which reports "303 endpoints across 170 projects (approximately 10.3% of the 1645 analyzed)" from
+  a scan completed 21 Mar 2025. That scan visited **the homepage of each site** in the *Lovable
+  Launched* showcase, which makes 10.3% a floor rather than a rate: a table the homepage never
+  queries was never tested. Both authors — Matt Palmer and Kody Low — work in Developer Relations
+  at Replit, a direct competitor.
+- **[Moltbook][moltbook-wiz] (Jan 2026)** — the failure was **absent RLS plus unauthenticated
+  writes**, not a leaked key: the `sb_publishable_` key in the bundle belongs in the client by
+  design. The finding was that tables answered it. Wiz names four — `agents`, `owners`,
+  `agent_messages`, `observers` — and reports **29,631 observer emails** (early-access signups),
+  **4,060 private DM conversations between agents**, **~17,000 human owner accounts** and
+  **~4.75M records**. Remediation took *multiple rounds*: write access to public tables was still
+  open after the first, and Wiz demonstrated it by editing a live post. Every figure is as reported
+  by Wiz, who say the team "secured it within hours", so nobody verified the counts independently.
+  [404 Media][moltbook-404] covered it too; that article is paywalled, so nothing here rests on it.
+  Wiz also headline **1.5M API authentication tokens and 35,000 email addresses**. Both are real
+  counts from that post — but they count *records*, not people: one token per registered agent, on
+  a platform where agent registration was open and automated. The human-scale number in the same
+  post is ~17,000 owners.
+- **[Veracode, 2026 GenAI Code Security Report][veracode]** — the **average security pass rate is
+  56%** across more than 100 models tested over four years, and it "hasn't moved" while the volume
+  of AI-generated code exploded — equivalently, **44% of generations fail** security review. The
+  2026 edition adds 11 new models over **80 tasks**. Those three
+  figures are on the public page; the per-CWE breakdown everyone quotes — XSS, log injection, SQL
+  injection, weak crypto — is inside the report itself, behind registration, so treat it as
+  uncheckable at the link. It measures out-of-the-box code completion, not whole agent-built apps.
 
 The platforms tell you securing the data is *your* responsibility. `vibeward` is how you check.
+
+[cve]: https://www.cve.org/CVERecord?id=CVE-2025-48757
+[cve-statement]: https://mattpalmer.io/posts/2025/05/statement-on-CVE-2025-48757/
+[moltbook-wiz]: https://www.wiz.io/blog/exposed-moltbook-database-reveals-millions-of-api-keys
+[moltbook-404]: https://www.404media.co/exposed-moltbook-database-let-anyone-take-control-of-any-ai-agent-on-the-site/
+[veracode]: https://www.veracode.com/resources/analyst-reports/2026-genai-code-security-report/
 
 ## What it scans
 
@@ -408,6 +442,18 @@ test/self-test.ts    synthetic tests (touch nothing external)
 test/prompt-test.ts  interactive selectors, driven through a fake TTY
 action.yml           GitHub Action (composite)
 ```
+
+## Audits
+
+The limits above are real, and they are the interesting half. Broken object-level authorization
+behind a login, a tenant boundary that holds on the first request and leaks on the third, business
+logic that was wrong before anyone typed a prompt — no scanner finds those, this one included.
+
+That part needs someone reading your app, and it is the work I do: Supabase and Firebase rules,
+auth boundaries, and a written report specific enough that your own agent can act on it.
+**[Book 20 minutes](https://cal.com/jsiapo)** and bring the URL.
+
+vibeward stays free and MIT regardless. There is no paid tier and nothing is held back from it.
 
 ## License
 
