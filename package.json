@@ -1,6 +1,6 @@
 {
   "name": "vibeward",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Scanner for AI-generated / vibe-coded apps and websites (Lovable, Bolt, v0, Supabase). Finds exposed secrets, missing RLS, insecure headers — and the SEO/AI-visibility gaps that give a vibe-coded site away. Read-only, authorized use.",
   "type": "module",
   "bin": {
@@ -11,7 +11,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc",
     "dev": "tsx src/cli.ts",
-    "test": "tsx test/self-test.ts && tsx test/prompt-test.ts",
+    "test": "tsx test/self-test.ts && tsx test/prompt-test.ts && tsx test/intent-test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -178,6 +178,13 @@ key in the frontend"_, _"make it public to debug"_, _"remove the login for now"_
 catches those the moment you ask — and tells you why and what to do instead — **before** the agent
 acts. The rules are deterministic (no LLM call), so they can't be prompt-injected away.
 
+**It works in English, Spanish and Portuguese.** Not by translating eight rules three times —
+the dangerous *objects* are already language-independent (`RLS`, `service_role`, `CORS`, `.env`
+are identifiers, not words), so a language costs one small verb table in `src/checks/lexicon.ts`
+and nothing else. That is roughly 40 entries a native speaker can review in five minutes, which
+is the only way a rule set in a language you don't read ever gets audited. PRs adding a table
+are welcome; the benign corpus in `test/intent-test.ts` is what a new language has to pass.
+
 `vibeward init` wires it up for you. To do it by hand, add it as a **Claude Code**
 `UserPromptSubmit` hook (in `~/.claude/settings.json` or a project's `.claude/settings.json`):
 
@@ -191,8 +198,14 @@ acts. The rules are deterministic (no LLM call), so they can't be prompt-injecte
 }
 ```
 
-A risky request is now blocked with an explanation before the model runs. Use `guard --warn` to
-warn without blocking.
+By default a risky request is **not blocked**. `UserPromptSubmit` is the one hook whose stdout is
+fed back into the model's context, so the guard exits `0` and injects the rule — the risk, why it
+matters, and the safe alternative — into the context of the agent that is about to act. Your prompt
+survives, and the agent corrects its own approach. A false positive costs you one ignored note.
+
+Add `--block` if you want the hard stop instead (`exit 2`): Claude Code then blocks the prompt
+**and erases it**, which is the right trade for a small team with a strict policy and the wrong one
+for everyone else. `--warn` still works as an alias of the default for older `settings.json` files.
 
 ## Two modes
 
@@ -320,7 +333,8 @@ src/
     sourcemaps.ts      exposed source maps
     web.ts             SEO, AI visibility, quality, vibe-coded fingerprint
     console.ts         browser console errors (optional Playwright)
-    intent.ts          guardrail intent rules
+    intent.ts          guardrail intent rules (declared as verb + target, compiled per language)
+    lexicon.ts         verb tables and shared targets — add a language here, nowhere else
   scanners/          orchestrators: url (black-box), folder (white-box), guard (hook)
   init/              the `init` command: targets, templates, installer
   reporters/         markdown report, SARIF output, output/finish

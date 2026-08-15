@@ -43,7 +43,10 @@ function usage(): void {
     `  vibeward supabase-sql                                                  print the read-only audit query`,
   );
   log(
-    `  vibeward guard [--warn]                                                hook: gate risky prompts (reads stdin)\n`,
+    `  vibeward guard [--block]                                               hook: gate risky prompts (reads stdin)`,
+  );
+  log(
+    `${C.dim}      default: warns the agent in-context (exit 0); --block erases the prompt (exit 2)${C.reset}\n`,
   );
   log(`${C.dim}Example:  vibeward https://client-app.lovable.app --yes${C.reset}`);
 }
@@ -65,7 +68,9 @@ async function main(): Promise<void> {
     process.exit(0);
   }
   if (cmd === 'guard') {
-    await runGuard(argv.includes('--warn'));
+    // Default is context injection, not blocking: see the note on GuardMode. `--warn` is
+    // kept as an alias so settings.json files written by older versions keep working.
+    await runGuard(argv.includes('--block') ? 'block' : 'context');
   }
   if (cmd === 'init') {
     // Loaded on demand: the installer carries every template as a string, and a plain
