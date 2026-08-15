@@ -16,8 +16,6 @@ export const MARKER_END = '<!-- vibeward:end -->';
 /** The hook event that gates a prompt before the agent acts on it. */
 export const HOOK_EVENT = 'UserPromptSubmit';
 
-export const GUARD_COMMAND = 'npx vibeward@latest guard';
-
 export interface HookHandler {
   type: 'command';
   command: string;
@@ -31,18 +29,32 @@ export interface HookGroup {
 }
 
 /**
+ * Everything a template needs to know about the machine it is being written on. The guard
+ * command is resolved once per run (see `binary.ts`) instead of hardcoded, because what the
+ * hook should run depends on whether there is an installed `vibeward` to run.
+ */
+export interface RenderContext {
+  guardCommand: string;
+  guardTimeout: number;
+}
+
+/**
  * One matcher group for the guard. UserPromptSubmit takes no `matcher`, but the group
  * object is still required — flattening this into a bare list of handlers silently stops
- * the hook from loading. No `args`, so the command runs through a shell and `npx` resolves.
+ * the hook from loading. No `args`, so the command runs through a shell.
  * `timeout` is explicit because UserPromptSubmit caps hooks at 30 s and a cold `npx`
  * download can need longer; a timeout cancels the hook and discards its output.
  */
-export const GUARD_HOOK: HookGroup = {
-  hooks: [{ type: 'command', command: GUARD_COMMAND, timeout: 60 }],
-};
+export function guardHook(ctx: RenderContext): HookGroup {
+  return {
+    hooks: [{ type: 'command', command: ctx.guardCommand, timeout: ctx.guardTimeout }],
+  };
+}
 
 /** What the merge into an existing settings.json will add, for the preview. */
-export const GUARD_HOOK_JSON = JSON.stringify({ hooks: { [HOOK_EVENT]: [GUARD_HOOK] } }, null, 2);
+export function guardHookJson(ctx: RenderContext): string {
+  return JSON.stringify({ hooks: { [HOOK_EVENT]: [guardHook(ctx)] } }, null, 2);
+}
 
 const TITLE = '# vibeward — audit the deployed site, then fix what is safe to fix';
 

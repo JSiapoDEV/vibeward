@@ -9,7 +9,9 @@ import { dirname, sep } from 'node:path';
 import type { Choice } from '../core/prompt.js';
 import { isInteractive, multiselect, select } from '../core/prompt.js';
 import { C, confirm, log } from '../core/terminal.js';
-import { GUARD_HOOK, HOOK_EVENT, MARK, MARKER_END, MARKER_START } from './templates.js';
+import { resolveGuard, upgradeGuardCommand } from './binary.js';
+import type { RenderContext } from './templates.js';
+import { HOOK_EVENT, MARK, MARKER_END, MARKER_START, guardHook } from './templates.js';
 import type { Scope, Target } from './targets.js';
 import { TARGETS, findTarget, targetsFor } from './targets.js';
 
@@ -44,7 +46,9 @@ const NEXT_STEPS: Record<string, string[]> = {
   ],
   'claude-hook': [
     'Claude Code — risky prompts ("disable RLS", "use the service_role key") are now checked',
-    'by `vibeward guard` before the agent acts. Use `guard --warn` to warn without blocking.',
+    'before the agent acts, in English, Spanish and Portuguese. The prompt is not blocked:',
+    "the rule is injected into the agent's context so it corrects itself. Add `--block` to",
+    'the hook command for a hard stop instead.',
   ],
   cursor: ['Cursor — the rule applies from the next chat, no restart needed.'],
   'agents-md': [
@@ -134,22 +138,31 @@ function mergeMarkers(existing: string, block: string): string | null {
   return existing.slice(0, start) + block + existing.slice(end + MARKER_END.length);
 }
 
-/** Does this matcher group already run the guard? Read defensively: this is user JSON. */
-function hasGuard(group: unknown): boolean {
+/** Every handler in this matcher group that runs the guard. Read defensively: user JSON. */
+function guardHandlers(group: unknown): Record<string, unknown>[] {
   const handlers = asRecord(group)?.hooks;
-  if (!Array.isArray(handlers)) return false;
-  return handlers.some((h) => {
+  if (!Array.isArray(handlers)) return [];
+  return handlers.filter((h): h is Record<string, unknown> => {
     const command = asRecord(h)?.command;
     return typeof command === 'string' && /vibeward/.test(command) && /\bguard\b/.test(command);
   });
 }
 
+type MergeOutcome = 'added' | 'upgraded' | 'unchanged';
+
 /**
  * Adds the guard to `settings.json`, keeping every other setting exactly as it was.
  * Returns null when the file is not JSON we can safely rewrite — a settings file with a
  * typo in it is the user's problem to fix, not ours to reformat.
+ *
+ * A hook written by an older vibeward runs `npx vibeward@latest guard`, which re-resolves
+ * against the registry on every prompt. Leaving it alone would mean nobody who ever ran
+ * `init` migrates off it, so that exact prefix — and only that one — is rewritten in place.
  */
-function mergeGuardHook(raw: string): { content: string; added: boolean } | null {
+function mergeGuardHook(
+  raw: string,
+  ctx: RenderContext,
+): { content: string; outcome: MergeOutcome } | null {
   let parsed: unknown;
   try {
     parsed = raw.trim() === '' ? {} : JSON.parse(raw);
@@ -162,10 +175,23 @@ function mergeGuardHook(raw: string): { content: string; added: boolean } | null
   const hooks = asRecord(settings.hooks) ?? {};
   const existing = hooks[HOOK_EVENT];
   const groups: unknown[] = Array.isArray(existing) ? existing : [];
-  if (groups.some(hasGuard)) return { content: raw, added: false };
 
-  settings.hooks = { ...hooks, [HOOK_EVENT]: [...groups, GUARD_HOOK] };
-  return { content: `${JSON.stringify(settings, null, 2)}\n`, added: true };
+  const present = groups.flatMap(guardHandlers);
+  if (present.length > 0) {
+    let upgraded = false;
+    for (const handler of present) {
+      const next = upgradeGuardCommand(handler.command as string, ctx.guardCommand);
+      if (next === null) continue;
+      handler.command = next;
+      handler.timeout = ctx.guardTimeout;
+      upgraded = true;
+    }
+    if (!upgraded) return { content: raw, outcome: 'unchanged' };
+    return { content: `${JSON.stringify(settings, null, 2)}\n`, outcome: 'upgraded' };
+  }
+
+  settings.hooks = { ...hooks, [HOOK_EVENT]: [...groups, guardHook(ctx)] };
+  return { content: `${JSON.stringify(settings, null, 2)}\n`, outcome: 'added' };
 }
 
 // ---------------------------------------------------------------------------
@@ -182,8 +208,13 @@ function row(
   return { target, path, action, detail, content };
 }
 
-function planCreate(target: Target, path: string, current: string | null): PlanRow {
-  const content = target.render();
+function planCreate(
+  target: Target,
+  path: string,
+  current: string | null,
+  ctx: RenderContext,
+): PlanRow {
+  const content = target.render(ctx);
   if (current === null) return row(target, path, 'create', 'new file', content);
   if (current === content) return row(target, path, 'skip', UP_TO_DATE, null);
 
@@ -193,8 +224,13 @@ function planCreate(target: Target, path: string, current: string | null): PlanR
   return row(target, path, 'skip', 'already there and not written by vibeward', null);
 }
 
-function planMarkers(target: Target, path: string, current: string | null): PlanRow {
-  const block = target.render();
+function planMarkers(
+  target: Target,
+  path: string,
+  current: string | null,
+  ctx: RenderContext,
+): PlanRow {
+  const block = target.render(ctx);
   if (current === null) return row(target, path, 'create', 'new file', `${block}\n`);
 
   const next = mergeMarkers(current, block);
@@ -208,22 +244,31 @@ function planMarkers(target: Target, path: string, current: string | null): Plan
   return row(target, path, 'merge', detail, next);
 }
 
-function planJson(target: Target, path: string, current: string | null): PlanRow {
-  if (current === null) return row(target, path, 'create', 'new file', `${target.render()}\n`);
+function planJson(
+  target: Target,
+  path: string,
+  current: string | null,
+  ctx: RenderContext,
+): PlanRow {
+  if (current === null) return row(target, path, 'create', 'new file', `${target.render(ctx)}\n`);
 
-  const merged = mergeGuardHook(current);
+  const merged = mergeGuardHook(current, ctx);
   if (merged === null) {
     return row(target, path, 'skip', 'not valid JSON — left untouched', null);
   }
-  if (!merged.added) return row(target, path, 'skip', UP_TO_DATE, null);
-  return row(target, path, 'merge', `adding the ${HOOK_EVENT} hook`, merged.content);
+  if (merged.outcome === 'unchanged') return row(target, path, 'skip', UP_TO_DATE, null);
+  const detail =
+    merged.outcome === 'upgraded'
+      ? `repointing the hook off npx @latest → ${ctx.guardCommand}`
+      : `adding the ${HOOK_EVENT} hook`;
+  return row(target, path, 'merge', detail, merged.content);
 }
 
-function buildRow(target: Target, path: string): PlanRow {
+function buildRow(target: Target, path: string, ctx: RenderContext): PlanRow {
   const current = existsSync(path) ? safeRead(path) : null;
-  if (target.strategy === 'merge-json') return planJson(target, path, current);
-  if (target.strategy === 'merge-markers') return planMarkers(target, path, current);
-  return planCreate(target, path, current);
+  if (target.strategy === 'merge-json') return planJson(target, path, current, ctx);
+  if (target.strategy === 'merge-markers') return planMarkers(target, path, current, ctx);
+  return planCreate(target, path, current, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +323,68 @@ function resolveTargets(ids: string[], scope: Scope): Target[] {
     if (!chosen.includes(target)) chosen.push(target);
   }
   return chosen;
+}
+
+// ---------------------------------------------------------------------------
+// What the guard hook will run
+// ---------------------------------------------------------------------------
+
+/**
+ * Decides the hook command before anything is planned, because it changes what the preview
+ * shows. Order: an installed binary, else offer to install one, else a pinned npx. The
+ * offer only happens on a terminal — a CI run gets the pin silently, which is the correct
+ * answer there anyway.
+ */
+async function resolveGuardContext(wanted: boolean, yes: boolean): Promise<RenderContext> {
+  let guard = resolveGuard();
+  if (!wanted || guard.binary) {
+    return { guardCommand: guard.command, guardTimeout: guard.timeout };
+  }
+
+  log(`\n${C.yellow}No installed \`vibeward\` on your PATH.${C.reset}`);
+  log(
+    `${C.dim}The guard runs on every prompt you type. Running it through npx would add a${C.reset}`,
+  );
+  log(
+    `${C.dim}registry round-trip to each one, break with no network, and — the reason that${C.reset}`,
+  );
+  log(`${C.dim}matters — run whatever was published last, unreviewed, on your machine.${C.reset}`);
+
+  if (isInteractive() && !yes) {
+    const ok = await confirm(
+      `\n${C.bold}Install it now?${C.reset} ${C.dim}npm i -g vibeward${C.reset} [y/N] `,
+    );
+    if (ok) {
+      log(`\n${C.dim}$ npm i -g vibeward${C.reset}`);
+      const { spawnSync } = await import('node:child_process');
+      const result = spawnSync('npm', ['i', '-g', 'vibeward'], {
+        stdio: 'inherit',
+        shell: process.platform === 'win32',
+      });
+      if (result.status === 0) {
+        guard = resolveGuard();
+        if (guard.binary) {
+          log(
+            `\n${C.green}✓${C.reset} installed — the hook will run ${C.cyan}${guard.command}${C.reset}`,
+          );
+          return { guardCommand: guard.command, guardTimeout: guard.timeout };
+        }
+        // Installed, but the global bin directory is not on this shell's PATH. Writing
+        // the bare name would produce a hook that fails on every prompt.
+        log(`\n${C.yellow}Installed, but not on this shell's PATH.${C.reset}`);
+      } else {
+        log(
+          `\n${C.yellow}That did not work${C.reset} ${C.dim}(npm exited ${result.status ?? 'abnormally'})${C.reset}`,
+        );
+      }
+    }
+  }
+
+  log(
+    `${C.dim}Pinning to ${guard.command} instead — a future publish will not run until you${C.reset}`,
+  );
+  log(`${C.dim}raise the pin, or install the binary and re-run \`vibeward init\`.${C.reset}`);
+  return { guardCommand: guard.command, guardTimeout: guard.timeout };
 }
 
 // ---------------------------------------------------------------------------
@@ -341,10 +448,15 @@ export async function runInit(opts: InitOptions): Promise<never> {
     process.exit(0);
   }
 
+  const ctx = await resolveGuardContext(
+    chosen.some((t) => t.strategy === 'merge-json'),
+    opts.yes ?? false,
+  );
+
   const rows: PlanRow[] = [];
   for (const target of chosen) {
     const path = target.path(scope, cwd, home);
-    if (path) rows.push(buildRow(target, path));
+    if (path) rows.push(buildRow(target, path, ctx));
   }
 
   log(`\n${C.bold}Plan${C.reset} ${C.dim}(${MARK}, ${scope} scope)${C.reset}`);

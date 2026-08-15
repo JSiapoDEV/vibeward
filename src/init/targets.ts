@@ -6,14 +6,17 @@
 // a tool no longer reads is worse than no file at all: the user believes it is installed.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { RenderContext } from './templates.js';
 import {
   GH_WORKFLOW,
-  GUARD_HOOK_JSON,
   agentsBlock,
   claudeSkill,
   cursorRule,
+  guardHookJson,
   windsurfRule,
 } from './templates.js';
+
+export type { RenderContext };
 
 export type Scope = 'project' | 'user';
 
@@ -30,7 +33,8 @@ export interface Target {
   scopes: Scope[];
   path(scope: Scope, cwd: string, home: string): string | null;
   strategy: Strategy;
-  render(): string;
+  /** Templates that do not depend on the machine simply ignore the context. */
+  render(ctx: RenderContext): string;
   /** Heuristic: does this repo/machine already use this tool? */
   detect(scope: Scope, cwd: string, home: string): boolean;
   /** Why it is unavailable in a scope, shown greyed out instead of hidden. */
@@ -68,7 +72,7 @@ export const TARGETS: Target[] = [
     // settings.json and not settings.local.json: the project file is meant to be committed
     // and shared, and hooks merge across levels instead of replacing each other.
     path: (scope, cwd, home) => join(scope === 'user' ? home : cwd, '.claude', 'settings.json'),
-    render: () => GUARD_HOOK_JSON,
+    render: (ctx) => guardHookJson(ctx),
     detect: (scope, cwd, home) =>
       scope === 'user'
         ? any(join(home, '.claude'))

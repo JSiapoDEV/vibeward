@@ -1,11 +1,30 @@
 # vibeward
 
-**Scanner for AI-generated / vibe-coded apps and websites** — Lovable, Bolt, v0, Supabase, MCP.
+**Stops the insecure prompt before your agent runs it — and audits what it already shipped.**
 
-Things built with AI ship fast, and ship the same handful of holes. **Apps** leak API keys, forget
-Row-Level Security and check authorization in the browser. **Websites** ship with no metadata, no
-sitemap and a robots.txt that blocks the AI assistants people now search with — invisible to
-Google and to ChatGPT alike. `vibeward` finds both from the outside, read-only, in one command.
+```
+> disable RLS on the users table so the query works
+
+⚠  vibeward flagged a risky request
+
+✗ Disabling Row-Level Security
+  why:  every row becomes readable by anyone holding the public anon key — the single
+        most common cause of vibe-coded data leaks.
+  do this instead:  keep RLS on and add a policy:
+        CREATE POLICY ... USING (auth.uid() = user_id)
+```
+
+Most vibe-coded holes do not start as bad code. They start as a reasonable-sounding request:
+_"disable RLS so it works"_, _"use the service_role key in the frontend"_, _"remove the login for
+now"_. The agent complies, because complying is the job. `vibeward guard` runs as a Claude Code
+hook and catches that the moment you type it — in English, Spanish or Portuguese — with why it is
+dangerous and what to do instead, **before** the agent acts. The rules are deterministic, with no
+LLM call anywhere, so they cannot be prompt-injected away.
+
+For what is already shipped, the same tool is a read-only scanner: exposed secrets, broken
+Supabase Row-Level Security, Firebase exposure and insecure backends, from a live URL or from the
+repo — plus, on a scale of its own that never gates a build, the SEO and AI-visibility gaps that
+give a vibe-coded site away.
 
 ![node](https://img.shields.io/badge/node-%3E%3D20-3c873a) ![license](https://img.shields.io/badge/license-MIT-blue) ![types](https://img.shields.io/badge/types-TypeScript-3178c6)
 
@@ -111,13 +130,86 @@ business logic) are **not** claimed by an automated scan — they are the manual
 
 ## Run it
 
-No install needed — use `npx`, so you always run the latest version:
+To try it once, `npx` needs no install:
 
 ```bash
 npx vibeward@latest https://client-app.lovable.app
 ```
 
-(All the examples below drop the `npx vibeward@latest` prefix for brevity.)
+To keep it — and **always** for the guard hook — install it:
+
+```bash
+npm i -g vibeward
+vibeward https://client-app.lovable.app
+```
+
+(The examples below assume the installed binary. Any of them also works with an
+`npx vibeward@latest` prefix — except the guard hook.)
+
+**Why the guard hook is different.** A scan is something you run on purpose, a few times a
+day; paying `npx`'s registry round-trip for it is fine. The guard runs on *every prompt you
+type*, and there `npx vibeward@latest` costs you three things:
+
+```
+npx vibeward@latest guard   1.78s
+vibeward guard              0.16s   ← 11×
+```
+
+1.8 s added to every prompt, a hard dependency on the network (`@latest` re-resolves against
+the registry every run, so offline means a failing hook), and — the one that actually
+matters for a security tool — **every future version I publish executes on your machine
+without review.** If my npm account is ever compromised, `@latest` is instant code execution
+across every user, on their next keystroke. An installed binary is a version you chose.
+
+## Guardrail — stop risky requests before they happen
+
+Eight rules, matched against what you actually asked for: disabling RLS, moving a `service_role`
+key into the client, making a bucket or a table public, removing an auth check, a CORS wildcard,
+hardcoding a secret, turning off CSRF or rate limiting, committing a `.env`. Each one answers with
+the risk, why it matters, and the safe alternative.
+
+It is a rule engine and not a model, which is the whole point: *"ignore previous instructions"*
+does not work on a regex. It also means it is a seatbelt and not a boundary — someone will always
+find a phrasing that means "disable RLS" and does not trip a rule. Report those, they are how the
+lexicon grows.
+
+**It works in English, Spanish and Portuguese.** Not by translating eight rules three times —
+the dangerous *objects* are already language-independent (`RLS`, `service_role`, `CORS`, `.env`
+are identifiers, not words), so a language costs one small verb table in `src/checks/lexicon.ts`
+and nothing else. That is roughly 40 entries a native speaker can review in five minutes, which
+is the only way a rule set in a language you don't read ever gets audited. PRs adding a table
+are welcome; the benign corpus in `test/intent-test.ts` is what a new language has to pass.
+
+`vibeward init` wires it up for you. To do it by hand, install the binary and add it as a
+**Claude Code** `UserPromptSubmit` hook (in `~/.claude/settings.json` or a project's
+`.claude/settings.json`):
+
+```bash
+npm i -g vibeward
+```
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "vibeward guard" }] }
+    ]
+  }
+}
+```
+
+Use the installed binary here, not `npx vibeward@latest` — see [Run it](#run-it) for why a
+hook that runs on every prompt is the one place `@latest` is a bad trade. Update on your own
+schedule with `npm i -g vibeward@latest`.
+
+By default a risky request is **not blocked**. `UserPromptSubmit` is the one hook whose stdout is
+fed back into the model's context, so the guard exits `0` and injects the rule — the risk, why it
+matters, and the safe alternative — into the context of the agent that is about to act. Your prompt
+survives, and the agent corrects its own approach. A false positive costs you one ignored note.
+
+Add `--block` if you want the hard stop instead (`exit 2`): Claude Code then blocks the prompt
+**and erases it**, which is the right trade for a small team with a strict policy and the wrong one
+for everyone else. `--warn` still works as an alias of the default for older `settings.json` files.
 
 ## Install it into your AI tools
 
@@ -170,42 +262,6 @@ whether the incident has to be disclosed.
 > One gotcha worth knowing: **Claude Code reads `CLAUDE.md`, not `AGENTS.md`.** If you install only
 > the AGENTS.md target, add `@AGENTS.md` as the first line of your `CLAUDE.md` — or just install the
 > Claude Code skill, which `init` offers first.
-
-## Guardrail — stop risky requests before they happen
-
-Most vibe-coded holes start with a prompt: _"disable RLS so it works"_, _"use the service_role
-key in the frontend"_, _"make it public to debug"_, _"remove the login for now"_. `vibeward guard`
-catches those the moment you ask — and tells you why and what to do instead — **before** the agent
-acts. The rules are deterministic (no LLM call), so they can't be prompt-injected away.
-
-**It works in English, Spanish and Portuguese.** Not by translating eight rules three times —
-the dangerous *objects* are already language-independent (`RLS`, `service_role`, `CORS`, `.env`
-are identifiers, not words), so a language costs one small verb table in `src/checks/lexicon.ts`
-and nothing else. That is roughly 40 entries a native speaker can review in five minutes, which
-is the only way a rule set in a language you don't read ever gets audited. PRs adding a table
-are welcome; the benign corpus in `test/intent-test.ts` is what a new language has to pass.
-
-`vibeward init` wires it up for you. To do it by hand, add it as a **Claude Code**
-`UserPromptSubmit` hook (in `~/.claude/settings.json` or a project's `.claude/settings.json`):
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "npx vibeward@latest guard" }] }
-    ]
-  }
-}
-```
-
-By default a risky request is **not blocked**. `UserPromptSubmit` is the one hook whose stdout is
-fed back into the model's context, so the guard exits `0` and injects the rule — the risk, why it
-matters, and the safe alternative — into the context of the agent that is about to act. Your prompt
-survives, and the agent corrects its own approach. A false positive costs you one ignored note.
-
-Add `--block` if you want the hard stop instead (`exit 2`): Claude Code then blocks the prompt
-**and erases it**, which is the right trade for a small team with a strict policy and the wrong one
-for everyone else. `--warn` still works as an alias of the default for older `settings.json` files.
 
 ## Two modes
 

@@ -41,6 +41,16 @@ import {
 import type { SiteFiles } from '../src/http/crawl.js';
 import type { Finding } from '../src/core/types.js';
 import { parseConfig, applySuppressions, notApplicableChecks } from '../src/core/config.js';
+import {
+  findOnPath,
+  pinnedNpxGuard,
+  resolveGuard,
+  upgradeGuardCommand,
+} from '../src/init/binary.js';
+import { guardHookJson } from '../src/init/templates.js';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 
 let pass = 0;
 let fail = 0;
@@ -1113,6 +1123,84 @@ console.log('\n26. vibeward.json — declared intent and suppressions');
       'the report shows "not applicable" with the reason, never a bare ✅',
     );
   }
+}
+
+console.log('\n27. Guard hook command — never @latest in a settings.json');
+{
+  const bin = join(tmpdir(), `vibeward-bin-${process.pid}`);
+  const npxCache = join(tmpdir(), `_npx`, `deadbeef`, 'node_modules', '.bin');
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(npxCache, { recursive: true });
+  const exe = process.platform === 'win32' ? 'vibeward.CMD' : 'vibeward';
+  writeFileSync(join(bin, exe), '#!/bin/sh\n');
+  writeFileSync(join(npxCache, exe), '#!/bin/sh\n');
+
+  assert(findOnPath('vibeward', { PATH: bin }) === join(bin, exe), 'finds a binary on PATH');
+  assert(findOnPath('vibeward', { PATH: '' }) === null, 'no PATH means no binary');
+  assert(
+    findOnPath('vibeward', { PATH: tmpdir() }) === null,
+    'a directory without the binary resolves to null',
+  );
+
+  // The one that would silently break every future prompt: `npx vibeward@latest init` puts
+  // its own temporary extraction on PATH, and that copy is gone by the next prompt.
+  assert(
+    findOnPath('vibeward', { PATH: npxCache }) === null,
+    'ignores the npx cache — that copy does not survive the run',
+  );
+  assert(
+    findOnPath('vibeward', { PATH: `${npxCache}${delimiter}${bin}` }) === join(bin, exe),
+    'skips the npx cache and keeps looking down PATH',
+  );
+
+  assert(
+    resolveGuard({ PATH: bin }).command === 'vibeward guard',
+    'an installed binary is what the hook runs',
+  );
+
+  const fallback = resolveGuard({ PATH: '' });
+  assert(fallback.binary === null, 'no binary found means the npx fallback');
+  assert(
+    fallback.command.startsWith('npx vibeward@') && !fallback.command.includes('@latest'),
+    'the fallback is pinned to a version, never @latest',
+  );
+  assert(
+    fallback.timeout > resolveGuard({ PATH: bin }).timeout,
+    'the npx fallback gets the longer timeout — a cold download needs it',
+  );
+
+  for (const ctx of [
+    { guardCommand: 'vibeward guard', guardTimeout: 10 },
+    { guardCommand: pinnedNpxGuard('9.9.9'), guardTimeout: 60 },
+  ]) {
+    assert(
+      !guardHookJson(ctx).includes('@latest'),
+      `the rendered hook never contains @latest (${ctx.guardCommand})`,
+    );
+  }
+
+  // Migrating the hooks an older vibeward already wrote.
+  assert(
+    upgradeGuardCommand('npx vibeward@latest guard', 'vibeward guard') === 'vibeward guard',
+    'a legacy @latest hook is repointed at the binary',
+  );
+  assert(
+    upgradeGuardCommand('npx vibeward@latest guard --block', 'vibeward guard') ===
+      'vibeward guard --block',
+    'flags the user added survive the upgrade',
+  );
+  assert(
+    upgradeGuardCommand('vibeward guard', 'vibeward guard') === null,
+    'an already-migrated hook is left alone',
+  );
+  assert(
+    upgradeGuardCommand('/opt/mine/vibeward guard', 'vibeward guard') === null,
+    'a hand-written command is never rewritten',
+  );
+  assert(
+    upgradeGuardCommand('npx vibeward@0.3.0 guard', 'vibeward guard') === null,
+    'a pin the user chose is theirs to raise, not ours',
+  );
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

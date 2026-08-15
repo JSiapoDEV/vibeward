@@ -1,7 +1,7 @@
 {
   "name": "vibeward",
   "version": "0.3.1",
-  "description": "Scanner for AI-generated / vibe-coded apps and websites (Lovable, Bolt, v0, Supabase). Finds exposed secrets, missing RLS, insecure headers — and the SEO/AI-visibility gaps that give a vibe-coded site away. Read-only, authorized use.",
+  "description": "Stops the insecure prompt before your AI agent runs it — and audits what it already shipped. A deterministic guardrail (no LLM call) for Claude Code that catches \"disable RLS\" or \"use the service_role key in the frontend\" in English, Spanish and Portuguese, plus a read-only scanner for exposed secrets, open Supabase RLS and Firebase leaks in Lovable / Bolt / v0 apps.",
   "type": "module",
   "bin": {
     "vibeward": "dist/cli.js"
