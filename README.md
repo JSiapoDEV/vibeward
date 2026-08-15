@@ -164,23 +164,24 @@ business logic) are **not** claimed by an automated scan — they are the manual
 
 ## Run it
 
-To try it once, `npx` needs no install:
+No install:
 
 ```bash
 npx vibeward@latest https://client-app.lovable.app
+npx vibeward@latest init
 ```
 
-To keep it — and **always** for the guard hook — install it:
+If you use it more than once, a global install is the same commands without the wait:
 
 ```bash
 npm i -g vibeward
 vibeward https://client-app.lovable.app
 ```
 
-(The examples below assume the installed binary. Any of them also works with an
-`npx vibeward@latest` prefix — except the guard hook.)
+Either entry point is fine, including for setting up the guard — `init` resolves that part
+itself and **never writes `@latest` into your settings**. The examples below drop the prefix.
 
-**Why the guard hook is different.** A scan is something you run on purpose, a few times a
+**Why the guard hook is the exception.** A scan is something you run on purpose, a few times a
 day; paying `npx`'s registry round-trip for it is fine. The guard runs on *every prompt you
 type*, and there `npx vibeward@latest` costs you three things:
 
@@ -214,9 +215,14 @@ and nothing else. That is roughly 40 entries a native speaker can review in five
 is the only way a rule set in a language you don't read ever gets audited. PRs adding a table
 are welcome; the benign corpus in `test/intent-test.ts` is what a new language has to pass.
 
-`vibeward init` wires it up for you. To do it by hand, install the binary and add it as a
-**Claude Code** `UserPromptSubmit` hook (in `~/.claude/settings.json` or a project's
-`.claude/settings.json`):
+**`vibeward init` wires it up for you, from either entry point.** It looks for an installed
+`vibeward`, offers to install one if there is none, and pins to an exact version if you decline —
+so `npx vibeward@latest init` is a perfectly good way in, and `@latest` still never reaches your
+settings. Re-running it also repoints a hook an older version left on `@latest`, keeping any
+flags you added.
+
+To do it by hand instead, install the binary and add it as a **Claude Code**
+`UserPromptSubmit` hook (in `~/.claude/settings.json` or a project's `.claude/settings.json`):
 
 ```bash
 npm i -g vibeward
