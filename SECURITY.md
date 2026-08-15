@@ -9,12 +9,14 @@ and it is welcome — see [Not a vulnerability](#not-a-vulnerability-but-please-
 
 **Do not open a public issue for a vulnerability in vibeward.**
 
-Use GitHub's private reporting:
+Use GitHub's private reporting. It is enabled on this repository, the thread is visible only
+to you and the maintainer, and it is the only channel — there is no email address to harvest
+off this page, and nobody will ever ask you for one:
 
 **→ [Report a vulnerability](https://github.com/JSiapoDEV/vibeward/security/advisories/new)**
 
-Or email **[redacted]** with `vibeward security` in the subject. PGP is not offered; if the report itself is sensitive, ask on that thread and we
-will move to a channel you choose.
+If you cannot use GitHub at all, open a normal issue containing **no details** — just "I have
+a security report" — and a private channel will be arranged from there.
 
 Please include:
 
