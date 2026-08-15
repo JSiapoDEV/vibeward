@@ -1,6 +1,6 @@
 {
   "name": "vibeward",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Stops the insecure prompt before your AI agent runs it — and audits what it already shipped. A deterministic guardrail (no LLM call) for Claude Code that catches \"disable RLS\" or \"use the service_role key in the frontend\" in English, Spanish and Portuguese, plus a read-only scanner for exposed secrets, open Supabase RLS and Firebase leaks in Lovable / Bolt / v0 apps.",
   "type": "module",
   "bin": {
@@ -56,6 +56,7 @@
   "files": [
     "dist",
     "README.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "engines": {
