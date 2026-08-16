@@ -1,7 +1,7 @@
 import { fetchText } from '../http/client.js';
 import { discoverScripts, discoverChunksFromBundle } from '../http/discovery.js';
 import { crawlSite } from '../http/crawl.js';
-import { scanText, extractSupabaseConfig } from '../checks/secrets.js';
+import { scanText, scanCrawledPages, extractSupabaseConfig } from '../checks/secrets.js';
 import { checkSourceMap } from '../checks/sourcemaps.js';
 import { checkHeaders } from '../checks/headers.js';
 import { checkWeb, parsePage, fingerprintStack } from '../checks/web.js';
@@ -136,6 +136,18 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
         ? `${C.gray}▸ Browser console: ${consoleErrors!.length} error(s)${C.reset}`
         : `${C.gray}▸ Browser console skipped (Playwright not installed)${C.reset}`,
     );
+
+    // Secrets in the inline scripts of a secondary page: the home page and the external
+    // bundles are scanned above, but a crawled page was only ever mined for meta tags — so on
+    // a site whose marketing lives on `/` and whose application lives on `app.html`, the code
+    // went unscanned. See scanCrawledPages for the dedup semantics.
+    findings.push(...scanCrawledPages(crawl.pages, [target, baseUrl], findings));
+    // A secondary page can carry the backend config the home page does not — pick it up so the
+    // (authorized) full scan has a target to probe.
+    for (const page of crawl.pages) {
+      if (!supabaseCfg) supabaseCfg = extractSupabaseConfig(page.html);
+      if (!firebaseCfg) firebaseCfg = extractFirebaseConfig(page.html);
+    }
 
     const pages = crawl.pages.map((p) => parsePage(p.html, p.url));
     fingerprint = fingerprintStack(mainPage.body, baseUrl, jsBytes, crawl.files);

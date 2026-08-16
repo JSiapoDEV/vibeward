@@ -2,6 +2,7 @@
 // without touching any external system. Run with: npm test
 import {
   scanText,
+  scanCrawledPages,
   scanSource,
   scanReturnedData,
   extractSupabaseConfig,
@@ -119,6 +120,90 @@ console.log('\n1. Secret detection');
     scanText(`function add(a,b){return a+b} const url="https://example.com"`, 'b.js').length === 0,
     'clean bundle => 0 findings',
   );
+  // The whole application often lives on a secondary page (`app.html`) while `/` is marketing.
+  // The URL scanner used to run the secret scanner on the home page and external bundles only,
+  // so a key in a secondary page's inline script was fetched and never scanned. Found while
+  // auditing a real BYOK app whose home page carried nothing and whose app.html carried the
+  // backend wiring.
+  const svc = fakeJwt('service_role');
+  const home = { url: 'https://s.test/', html: '<html><body>marketing</body></html>' };
+  const app = {
+    url: 'https://s.test/app',
+    html: `<html><body><script>createClient("https://x.supabase.co","${svc}")</script></body></html>`,
+  };
+  const crawled = scanCrawledPages([home, app], ['https://s.test/'], []);
+  assert(
+    crawled.some((f) => f.id === 'supabase_service_role' && f.source === 'https://s.test/app'),
+    'a service_role key in a secondary page inline script is caught, with that page as source',
+  );
+  // Dedup: the same key on two pages, and a key already reported by the home-page pass, appear
+  // once — not once per page.
+  const dupA = { url: 'https://s.test/a', html: app.html };
+  const dupB = { url: 'https://s.test/b', html: app.html };
+  assert(
+    scanCrawledPages([dupA, dupB], [], []).filter((f) => f.id === 'supabase_service_role')
+      .length === 1,
+    'the same key on several pages is reported once',
+  );
+  assert(
+    scanCrawledPages([app], [], scanText(app.html, 'https://s.test/')).length === 0,
+    'a key already found by an earlier pass is not reported again',
+  );
+  // The anon key is public by design and must never be reported, wherever it sits — this is the
+  // real videoapuntes case, whose only Supabase key in app.html is the anon key.
+  const anonApp = {
+    url: 'https://s.test/app',
+    html: `<html><body><script>createClient("https://y.supabase.co","${fakeJwt('anon')}")</script></body></html>`,
+  };
+  assert(
+    !scanCrawledPages([anonApp], [], []).some((f) => f.id === 'supabase_service_role'),
+    'an anon key in a secondary page is correctly left silent',
+  );
+  // A static bearer token in the bundle. Found in a real vibe-coded app, and missed by every
+  // pattern here: no vendor prefix, and after minification the variable holding it is `B`, so
+  // the name-keyed `generic_secret_assign` heuristic has nothing to match either. The signal
+  // has to be the USE — a literal that ends up behind `Bearer`.
+  const bearer = 'a852d372df4711967c81aa1c3b5629dfa12af8693eb67cd1';
+  assert(
+    scanText(
+      `B="${bearer}";fetch("/api/week",{headers:{Authorization:"Bearer ".concat(B)}})`,
+      'b.js',
+    ).some((f) => f.id === 'hardcoded_bearer'),
+    'detects a minified bearer token assigned one hop from its use',
+  );
+  assert(
+    scanText(`h={Authorization:"Bearer ${bearer}"}`, 'b.js').some(
+      (f) => f.id === 'hardcoded_bearer',
+    ),
+    'detects a bearer token written inline in the header',
+  );
+  // Precision: a token the client OBTAINS is an identifier with no literal assignment, and a
+  // documentation example is a placeholder. Neither may fire, or the check is noise in every
+  // README and every correct login flow.
+  for (const [why, code] of [
+    [
+      'a token from a login',
+      'const t = await login(); fetch(u,{headers:{Authorization:`Bearer ${t}`}})',
+    ],
+    [
+      'a token from storage',
+      'const tok = localStorage.getItem("tok"); h.Authorization = "Bearer " + tok;',
+    ],
+    [
+      'a token from the environment',
+      'headers: { Authorization: `Bearer ${process.env.API_TOKEN}` }',
+    ],
+    ['a docs example', 'curl -H "Authorization: Bearer YOUR_TOKEN_HERE" https://api.example.com'],
+    [
+      'a placeholder constant',
+      'const TOKEN = "replace-with-your-token-value"; h = "Bearer " + TOKEN;',
+    ],
+  ] as const) {
+    assert(
+      !scanText(code, 'b.js').some((f) => f.id === 'hardcoded_bearer'),
+      `does NOT flag ${why}`,
+    );
+  }
 }
 
 console.log('\n2. Supabase config extraction');
@@ -770,6 +855,38 @@ console.log('\n22. Website — findings and aggregation');
     !ids(noBrowser).includes('web_console_errors'),
     'consoleErrors === null (no Playwright) => no console finding, ever',
   );
+
+  // A megabyte of inline <script> is downloaded and parsed exactly like a bundle, and used to
+  // sail past a check literally named "JavaScript payload is heavy" because it had no `src`.
+  // Found on a real vibe-coded site whose home document was 3.7 MB, 3.3 MB of it inline.
+  {
+    const bigInline = `<html><head></head><body><script>${'a=1;'.repeat(400000)}</script></body></html>`;
+    const heavyPage = parsePage(bigInline, 'https://x.test/');
+    assert(heavyPage.inlineScriptBytes > 1_000_000, 'parsePage measures inline script bytes');
+    const w = checkWeb({
+      pages: [heavyPage],
+      files: goodFiles({}),
+      brokenAssets: [],
+      jsBytes: 0,
+      consoleErrors: null,
+    });
+    assert(
+      w.some((f) => f.id === 'web_heavy_bundle'),
+      'a multi-MB inline <script> trips the heavy-payload check even with zero external JS',
+    );
+    // Precision: a JSON-LD block is data, not code, and a small analytics snippet is normal.
+    const jsonLd = `<html><head><script type="application/ld+json">${JSON.stringify({ x: 'y'.repeat(60000) })}</script></head></html>`;
+    assert(
+      !checkWeb({
+        pages: [parsePage(jsonLd, 'https://x.test/')],
+        files: goodFiles({}),
+        brokenAssets: [],
+        jsBytes: 0,
+        consoleErrors: null,
+      }).some((f) => f.id === 'web_heavy_bundle'),
+      'a large JSON-LD block is data, not a heavy JS payload',
+    );
+  }
 
   // A single page cannot prove titles are duplicated.
   const onePage = checkWeb({

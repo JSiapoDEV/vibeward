@@ -67,6 +67,14 @@ export interface PageSignals {
   imgWithoutAlt: number;
   faviconLink: boolean;
   bodyTextLength: number;
+  /**
+   * Bytes of inline `<script>` in the document — the JavaScript that never appears as a
+   * separate bundle because it is written straight into the HTML. A hand-rolled or heavily
+   * inlined app can ship megabytes this way, and it is worse than an external bundle of the
+   * same size: it cannot be cached across pages and it blocks the HTML parser until it is
+   * fully downloaded. The heavy-payload check counts it alongside the external bundles.
+   */
+  inlineScriptBytes: number;
 }
 
 export interface StackFingerprint {
@@ -112,6 +120,24 @@ function stripComments(html: string): string {
  */
 function stripInert(html: string): string {
   return html.replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ');
+}
+
+/**
+ * Bytes inside `<script>` tags that have no `src` — the JavaScript inlined into the document
+ * rather than loaded as a separate file. A `src`-carrying script has an empty body, so it
+ * contributes nothing; a `type="application/ld+json"` block is data, not code, and is skipped.
+ */
+function inlineScriptBytes(html: string): number {
+  let total = 0;
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const attrs = m[1] ?? '';
+    if (/\bsrc\s*=/i.test(attrs)) continue;
+    if (/\btype\s*=\s*["']?[^"'>]*(?:ld\+json|json|importmap)/i.test(attrs)) continue;
+    total += Buffer.byteLength(m[2] ?? '', 'utf8');
+  }
+  return total;
 }
 
 /** Visible text: comments, script/style/noscript bodies and every tag removed. */
@@ -176,6 +202,9 @@ export function parsePage(html: string, url: string): PageSignals {
     imgWithoutAlt: images.filter((t) => attr(t, 'alt') === null).length,
     faviconLink,
     bodyTextLength: visibleTextLength(full),
+    // Measured from the whole document, not the size-capped `full`: the point of this signal
+    // is a payload big enough to be a problem, so it must not be capped away.
+    inlineScriptBytes: inlineScriptBytes(html),
   };
 }
 
@@ -770,17 +799,30 @@ export function checkWeb(input: {
     });
   }
 
-  if (jsBytes > HEAVY_BUNDLE_BYTES) {
+  // External bundles plus the biggest inline-script document. Inline script is counted because
+  // it is downloaded and parsed exactly like a bundle — a 3 MB `<script>` written into the HTML
+  // was sailing past a check named "JavaScript payload is heavy" purely because it had no `src`.
+  const inlineMax = Math.max(0, ...pages.map((p) => p.inlineScriptBytes));
+  const inlinePage = pages.find((p) => p.inlineScriptBytes === inlineMax);
+  const totalJs = jsBytes + inlineMax;
+  if (totalJs > HEAVY_BUNDLE_BYTES) {
+    const inlineNote =
+      inlineMax > HEAVY_BUNDLE_BYTES / 2
+        ? ` ${formatBytes(inlineMax)} of that is inline \`<script>\` written straight into the HTML document, which cannot be cached and blocks the parser until it fully downloads.`
+        : '';
     findings.push({
       id: 'web_heavy_bundle',
       label: 'JavaScript payload is heavy',
       severity: 'low',
       kind: 'web',
-      evidence: `${formatBytes(jsBytes)} of uncompressed JavaScript is downloaded to render the page (threshold: 1.0 MB).`,
+      evidence: `${formatBytes(totalJs)} of uncompressed JavaScript is downloaded to render the page (threshold: 1.0 MB).${inlineNote}`,
       impact:
         'On a mid-range phone over mobile data the page stays blank for seconds, and a large share of visitors leave before it paints — they never see the offer at all.',
-      why: 'Everything in the entry bundle blocks the first render, including code for routes the visitor may never open. Which dependency is responsible is a measurement, not a guess — `vite-bundle-visualizer` or `source-map-explorer` name it — and the usual answer is lazy-loading whatever is not needed for the first paint.',
-      meta: { count: jsBytes },
+      why: `Everything that blocks the first render — external bundles and inline script alike — delays the page for code the visitor may never reach. Which part is responsible is a measurement, not a guess: \`vite-bundle-visualizer\` or \`source-map-explorer\` name a bundle, and ${inlineMax > HEAVY_BUNDLE_BYTES / 2 ? 'a multi-megabyte inline script usually means data or templates that belong in a separate cached file or a server response' : 'the usual fix is lazy-loading whatever is not needed for the first paint'}.`,
+      meta: {
+        count: totalJs,
+        pages: inlineMax > 0 && inlinePage ? [inlinePage.url] : undefined,
+      },
     });
   }
 

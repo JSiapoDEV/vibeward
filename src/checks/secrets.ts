@@ -275,7 +275,82 @@ interface RawMatch {
   extra: Record<string, string>;
 }
 
+/**
+ * A static bearer token shipped to the browser.
+ *
+ * This needs its own pass because it cannot be found by matching a value. The token has no
+ * vendor prefix and no recognisable shape — it is just hex — and after minification the
+ * variable holding it is a single letter, so `generic_secret_assign` (which keys on names
+ * like `api_key = "…"`) has nothing to grab either. Found in the wild as:
+ *
+ *     B="a852d372df4711967c81aa1c3b5629dfa12af8693eb67cd1"
+ *     … fetch("/api/week", { headers: { Authorization: "Bearer ".concat(B) } })
+ *
+ * So the signal is the USE, not the value: a literal that ends up behind `Bearer`. A token
+ * the client obtains — from a login, from storage, from an env var — is an identifier with no
+ * literal assignment, and never matches.
+ */
+const BEARER_PATTERN: SecretPattern = {
+  id: 'hardcoded_bearer',
+  label: 'Hardcoded bearer token in client code',
+  severity: 'high',
+  check: 1,
+  cwe: 'CWE-798',
+  // Never executed: this pass finds its own matches. Present so the shape stays uniform.
+  regex: /(?!)/g,
+  exploit:
+    'The token is in a file the site serves to everyone, so every visitor holds the same credential. Anyone who opens the network tab can replay it against the API routes it authorises.',
+  why: 'A bearer token compiled into the bundle is a shared secret handed to every visitor, and it cannot be revoked for one person without revoking it for all. Whether that grants access to anything depends on what the server does with it — but a static token in client code is not authentication, and if it is the only check, the API is effectively public.',
+  references: [CWE_798, 'https://cwe.mitre.org/data/definitions/798.html'],
+};
+
+/** Obvious documentation stand-ins, so a README example is never reported as a live key. */
+const PLACEHOLDER =
+  /^(?:your|my|example|sample|test|demo|dummy|fake|changeme|replace|insert|token|abc|xxx)|(?:here|placeholder|token|key)$|\.\.\.|<|\$\{/i;
+
+/** Enough variety to be a generated credential rather than a word or a repeated character. */
+function looksGenerated(value: string): boolean {
+  if (value.length < 20 || PLACEHOLDER.test(value)) return false;
+  if (new Set(value).size < 8) return false;
+  return /\d/.test(value) && /[A-Za-z]/.test(value);
+}
+
+function* matchBearerTokens(text: string): Generator<RawMatch> {
+  const found = new Map<string, number>();
+
+  // 1. The literal sitting inside the header string itself.
+  const inline = /["'`]\s*Bearer\s+([A-Za-z0-9._~+/=-]{20,})\s*["'`]/g;
+  let m: RegExpExecArray | null;
+  while ((m = inline.exec(text)) !== null) {
+    const value = m[1]!;
+    if (looksGenerated(value) && !found.has(value)) found.set(value, m.index);
+  }
+
+  // 2. Minified: `"Bearer ".concat(B)`, `` `Bearer ${B}` `` or `"Bearer "+B`, with the literal
+  //    assigned to B somewhere else in the file.
+  const indirect = /["'`]Bearer\s*["'`]?\s*(?:\.concat\(|\+\s*|\$\{)\s*([A-Za-z_$][\w$]*)/g;
+  while ((m = indirect.exec(text)) !== null) {
+    const ident = m[1]!;
+    const assign = new RegExp(`\\b${ident}\\s*[=:]\\s*["'\`]([A-Za-z0-9._~+/=-]{20,})["'\`]`, 'g');
+    let a: RegExpExecArray | null;
+    while ((a = assign.exec(text)) !== null) {
+      const value = a[1]!;
+      if (looksGenerated(value) && !found.has(value)) found.set(value, a.index);
+    }
+  }
+
+  for (const [value, index] of found) {
+    yield {
+      pat: BEARER_PATTERN,
+      raw: value,
+      index,
+      extra: { key: mask(value), snippet: `Authorization: Bearer ${mask(value)}` },
+    };
+  }
+}
+
 function* matchSecrets(text: string): Generator<RawMatch> {
+  yield* matchBearerTokens(text);
   const seen = new Set<string>();
   for (const pat of SECRET_PATTERNS) {
     pat.regex.lastIndex = 0;
@@ -294,6 +369,35 @@ function* matchSecrets(text: string): Generator<RawMatch> {
       yield { pat, raw, index: m.index, extra };
     }
   }
+}
+
+/**
+ * Secrets across a set of crawled pages, deduped against what an earlier pass already found.
+ *
+ * Exists because the URL scanner used to run the secret scanner on the home page and the
+ * external bundles only — a crawled secondary page was mined for meta tags and nothing else.
+ * On a site whose marketing lives on `/` and whose actual application lives on `app.html`,
+ * that meant the code was never scanned. Dedup is by id+evidence, so the same key appearing
+ * on several pages is reported once rather than once per page.
+ */
+export function scanCrawledPages(
+  pages: { url: string; html: string }[],
+  skipUrls: Iterable<string>,
+  alreadyFound: Finding[],
+): Finding[] {
+  const skip = new Set(skipUrls);
+  const seen = new Set(alreadyFound.map((f) => `${f.id}:${f.evidence ?? ''}`));
+  const out: Finding[] = [];
+  for (const page of pages) {
+    if (skip.has(page.url)) continue;
+    for (const f of scanText(page.html, page.url)) {
+      const key = `${f.id}:${f.evidence ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(f);
+    }
+  }
+  return out;
 }
 
 /** Scans a fetched bundle; source is the bundle URL. */

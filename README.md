@@ -475,7 +475,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: JSiapoDEV/vibeward@v0.5.0
+      - uses: JSiapoDEV/vibeward@v0.5.1
         with:
           path: '.'
           # supabase: audit.json   # optional: a committed Supabase export
