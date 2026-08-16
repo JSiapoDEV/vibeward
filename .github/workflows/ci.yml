@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Every third-party action is pinned by commit SHA, never by tag. A tag is mutable: whoever
+# controls that repository can move it, and every workflow trusting the tag then runs new
+# code. It is the same argument this project makes against `npx @latest` in a guard hook.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      # No lockfile is committed (this package has no runtime dependencies), so `npm ci`
+      # has nothing to install from.
+      - run: npm install
+      # The suite covers the vendored guard copy, and that copy is `bin/vibeward.mjs`.
+      # Building it here is what makes CI exercise the real path rather than the
+      # not-built-yet fallback a fresh clone takes.
+      - run: npm run build:plugin
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm test
+
+  plugin:
+    # The plugin's files are no longer committed — `publish-plugin.yml` builds them on a tag
+    # and pushes them to the `plugin` branch, so there is no copy in the repository that
+    # could drift and nothing here to diff against. What is left worth checking is that the
+    # build still works, on the pull request rather than on release day.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - run: npm install
+      - run: npm run build:plugin
+      - name: The plugin build produced what the hooks expect to run
+        run: |
+          test -s bin/vibeward.mjs
+          test -x bin/vibeward
+          test -s skills/vibeward/SKILL.md
+          node bin/vibeward.mjs --version

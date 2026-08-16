@@ -1,0 +1,34 @@
+name: Missed finding
+description: vibeward stayed silent on something it should have caught
+labels: [missed-finding]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Silence is the failure a user never notices. If vibeward scanned something insecure and
+        said nothing, that is a gap worth a rule.
+
+        **Only report on an app you own or were authorized to audit**, and **do not paste a real
+        secret** — redact the value and keep its shape.
+  - type: textarea
+    id: what
+    attributes:
+      label: What should have been found
+      description: The risk that was present, and where (a prompt, a bundle, a header, a migration).
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The command you ran, and a redacted minimal example that reproduces the silence.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `npx vibeward@latest --version`.
+    validations:
+      required: true

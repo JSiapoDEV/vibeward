@@ -1,0 +1,23 @@
+{
+  "name": "vibeward",
+  "displayName": "vibeward",
+  "version": "0.5.1",
+  "description": "Stops the insecure prompt before Claude runs it, and audits what already shipped. Deterministic rules, no LLM call, in English, Spanish and Portuguese.",
+  "author": {
+    "name": "José Siapo",
+    "url": "https://github.com/JSiapoDEV"
+  },
+  "homepage": "https://vibeward.ai",
+  "repository": "https://github.com/JSiapoDEV/vibeward",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "guardrail",
+    "appsec",
+    "supabase",
+    "rls",
+    "secrets",
+    "prompt-injection",
+    "vibe-coding"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "name": "vibeward",
+  "description": "Security tooling for AI-generated code.",
+  "owner": {
+    "name": "José Siapo",
+    "url": "https://github.com/JSiapoDEV"
+  },
+  "plugins": [
+    {
+      "name": "vibeward",
+      "source": { "source": "github", "repo": "JSiapoDEV/vibeward", "ref": "plugin" },
+      "description": "Stops the insecure prompt before Claude runs it, and audits what already shipped. Deterministic rules, no LLM call, in English, Spanish and Portuguese.",
+      "category": "security",
+      "tags": ["security", "guardrail", "appsec", "supabase", "rls", "secrets"],
+      "homepage": "https://vibeward.ai",
+      "repository": "https://github.com/JSiapoDEV/vibeward",
+      "license": "MIT",
+      "author": {
+        "name": "José Siapo",
+        "url": "https://github.com/JSiapoDEV"
+      }
+    }
+  ]
+}

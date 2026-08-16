@@ -1,0 +1,42 @@
+name: False positive
+description: vibeward flagged something that is correct
+labels: [false-positive]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A false positive is the most serious bug this project has. A guardrail that cries wolf
+        gets uninstalled, and a scanner that does gets ignored. Every one of these ends as a
+        pinned test case, so please report it even if it seems minor.
+
+        **Do not paste a real secret.** Redact the value and keep the shape
+        (`sb_secret_XXXX…`, a 48-char hex token, and so on) — the shape is what matched.
+  - type: input
+    id: rule
+    attributes:
+      label: Which finding or rule fired
+      description: The finding id or title from the report, e.g. `hardcoded_bearer` or "Disabling Row-Level Security".
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: What it fired on
+      description: The prompt you typed, or the redacted code/header it matched.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is correct
+      description: What the code or prompt actually does, and why it is not the risk vibeward describes.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `npx vibeward@latest --version`.
+    validations:
+      required: true

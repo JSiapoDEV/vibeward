@@ -25,30 +25,48 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    # Pinned by commit SHA, not by tag. A tag is mutable: whoever controls the action's
+    # repository can move it, and every workflow that trusts the tag then runs new code.
+    # That is the same argument this project makes against `npx @latest` in a hook, and it
+    # would be hard to make credibly while depending on a floating tag here.
     - name: Set up Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
       with:
         node-version: '24'
 
+    # The version comes from the action's own package.json, which is checked out at whatever
+    # ref the caller pinned. `uses: JSiapoDEV/vibeward@v0.5.1` therefore runs vibeward 0.5.1
+    # — before this it ran `@latest`, so the pin covered the wrapper and not the scanner, and
+    # a workflow that had not changed in months could start reporting differently overnight.
+    # Reading the manifest rather than `github.action_ref` keeps that true when the caller
+    # pins a SHA or tracks a branch, where the ref is not a version at all.
     - name: Run vibeward
       shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        SCAN_URL: ${{ inputs.url }}
+        SCAN_PATH: ${{ inputs.path }}
+        SUPABASE_EXPORT: ${{ inputs.supabase }}
+        FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
       run: |
-        if [ -n "${{ inputs.url }}" ]; then
-          ARGS="${{ inputs.url }} --sarif vibeward.sarif --yes"
+        VERSION=$(node -p "require('$ACTION_PATH/package.json').version")
+        echo "vibeward $VERSION"
+        if [ -n "$SCAN_URL" ]; then
+          set -- "$SCAN_URL" --sarif vibeward.sarif --yes
         else
-          ARGS="scan ${{ inputs.path }} --sarif vibeward.sarif --yes"
+          set -- scan "$SCAN_PATH" --sarif vibeward.sarif --yes
         fi
-        if [ -n "${{ inputs.supabase }}" ]; then ARGS="$ARGS --supabase ${{ inputs.supabase }}"; fi
+        if [ -n "$SUPABASE_EXPORT" ]; then set -- "$@" --supabase "$SUPABASE_EXPORT"; fi
         set +e
-        npx --yes vibeward@latest $ARGS
+        npx --yes "vibeward@$VERSION" "$@"
         CODE=$?
         set -e
         echo "vibeward_code=$CODE" >> "$GITHUB_ENV"
-        if [ "${{ inputs.fail-on-critical }}" != "true" ]; then exit 0; fi
+        if [ "$FAIL_ON_CRITICAL" != "true" ]; then exit 0; fi
         exit $CODE
 
     - name: Upload SARIF to the Security tab
       if: always()
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
       with:
         sarif_file: vibeward.sarif

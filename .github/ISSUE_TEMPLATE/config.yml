@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability in vibeward itself
+    url: https://github.com/JSiapoDEV/vibeward/security/advisories/new
+    about: Private disclosure. Do not open a public issue for this — see SECURITY.md.
+  - name: Add a language to the guard rules
+    url: https://github.com/JSiapoDEV/vibeward/blob/main/README.md
+    about: A language costs one verb table. PRs adding one are welcome.

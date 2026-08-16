@@ -1,0 +1,38 @@
+name: Bug
+description: Something crashed, hung, or behaved unexpectedly
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Command and output
+      description: The exact command, and the output with any secret or client URL redacted.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `npx vibeward@latest --version`.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS and Node version
+      description: e.g. macOS 15 / Node 24.15.0
+    validations:
+      required: true

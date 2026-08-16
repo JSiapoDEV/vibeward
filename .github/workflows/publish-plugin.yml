@@ -1,0 +1,74 @@
+name: publish-plugin
+
+# Builds the Claude Code plugin and publishes it to the `plugin` branch.
+#
+# The plugin has to ship a working copy of the CLI: Claude Code installs a plugin by fetching
+# the repository, with no npm install and no build step, and its hooks run
+# `${CLAUDE_PLUGIN_ROOT}/bin/vibeward.mjs` on every prompt. Measured on the author's machine
+# that copy answers in 0.13s where `npx vibeward@<pinned> guard` takes 2.06s warm, so routing
+# the hook through npx is not an option for something that runs that often.
+#
+# What is not acceptable is a human committing that build to `main`. So nobody does: this
+# workflow builds it on a release tag, from a clean runner, and force-pushes it to an orphan
+# `plugin` branch. `main` stays free of build output, and the branch keeps exactly one commit
+# — a 300 KB bundle that changes every release would otherwise grow the history forever.
+#
+# `.claude-plugin/marketplace.json` lives on `main` and points the plugin at that branch, so
+# `/plugin marketplace add JSiapoDEV/vibeward` still works unchanged.
+
+on:
+  push:
+    tags: ['v*']
+  # Publishing by hand, for when a tag was pushed before this workflow existed or a run
+  # failed and the branch is behind.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # Only this job writes, and only to push the built branch.
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - run: npm install
+
+      # The gate. A plugin that reaches a user runs on every prompt they type, so a red test
+      # suite must not be publishable — including by hand through workflow_dispatch.
+      - run: npm test
+
+      - run: npm run build:plugin
+
+      # The tag and the manifest have to agree, or users install a plugin whose version
+      # string is a lie. Catching it here beats discovering it in a bug report.
+      - name: The tag matches the version in package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "tag v$TAG does not match package.json $PKG" >&2
+            exit 1
+          fi
+
+      - name: Push the built plugin to the `plugin` branch
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # An orphan branch, force-pushed: the branch holds the current build and no
+          # history. `-f` on `git add` is required because bin/ and skills/ are ignored on
+          # main, which is the whole point of doing this here.
+          git checkout --orphan plugin
+          git rm -rf --cached . > /dev/null
+          git add -f bin skills hooks .claude-plugin/plugin.json README.md LICENSE
+          git commit -m "plugin ${GITHUB_REF_NAME} (built from ${GITHUB_SHA})"
+          git push -f origin plugin

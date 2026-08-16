@@ -1,7 +1,7 @@
 {
   "name": "vibeward",
   "version": "0.5.1",
-  "description": "Stops the insecure prompt before your AI agent runs it — and audits what it already shipped. A deterministic guardrail (no LLM call) for Claude Code, Cursor, Codex, Copilot, Gemini, Windsurf and opencode that catches \"disable RLS\" or \"use the service_role key in the frontend\" in English, Spanish and Portuguese, plus a read-only scanner for exposed secrets, open Supabase RLS and Firebase leaks in Lovable / Bolt / v0 apps. It reports; it never edits your code.",
+  "description": "Stops the insecure prompt before your AI agent runs it \u2014 and audits what it already shipped. A deterministic guardrail (no LLM call) for Claude Code, Cursor, Codex, Copilot, Gemini, Windsurf and opencode that catches \"disable RLS\" or \"use the service_role key in the frontend\" in English, Spanish and Portuguese, plus a read-only scanner for exposed secrets, open Supabase RLS and Firebase leaks in Lovable / Bolt / v0 apps. It reports; it never edits your code.",
   "type": "module",
   "bin": {
     "vibeward": "dist/cli.js"
@@ -10,13 +10,14 @@
   "types": "dist/cli.d.ts",
   "scripts": {
     "build": "rm -rf dist && tsc",
+    "build:plugin": "npm run build && node scripts/build-plugin.mjs",
     "dev": "tsx src/cli.ts",
     "test": "tsx test/self-test.ts && tsx test/prompt-test.ts && tsx test/intent-test.ts && tsx test/injection-test.ts && tsx test/hosts-test.ts && tsx test/contract-test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build:plugin"
   },
   "keywords": [
     "security",
@@ -48,7 +49,7 @@
       "optional": true
     }
   },
-  "author": "José Siapo (https://github.com/jsiapodev)",
+  "author": "Jos\u00e9 Siapo (https://github.com/jsiapodev)",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -60,6 +61,7 @@
   },
   "files": [
     "dist",
+    "bin",
     "README.md",
     "SECURITY.md",
     "LICENSE"
@@ -70,6 +72,7 @@
   "devDependencies": {
     "@eslint/js": "^9.13.0",
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9.13.0",
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.3.3",

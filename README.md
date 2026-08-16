@@ -58,8 +58,9 @@ what it should do next.
 - **Call an LLM.** Not to classify, not to rank, not to suppress false positives. A guardrail
   that can be talked out of its own rules is not a guardrail.
 - **Decide severity at runtime.** It is in the rule table or it does not exist.
-- **Scan without authorization.** `--passive` is the default; the full scan requires the user to
-  state they own the target.
+- **Scan a backend without asking.** Reading public assets asks nothing, the way a browser
+  does not. The moment it finds a Supabase or Firebase backend it stops and asks before
+  reading a single row.
 - **Let security be silenced.** `vibeward.json` can only suppress `kind: "web"` ids.
 - **Prove a site is safe.** It covers a known, finite list. A clean report means those checks
   passed, nothing more.
@@ -189,46 +190,42 @@ silenced by a config file, by design. A verdict anyone can edit their way out of
 The file is read from **local disk only**, never from the site being scanned: otherwise anyone
 could silence their own audit by uploading a file to their own server.
 
-By default the scan is strictly read-only. `--passive` narrows it further, to only the assets a
-browser already downloads (bundles, headers, public pages) with no data probing at all — that is
-the mode to use when you are looking at an app whose owner has not authorized a full scan yet.
+Most of a scan is a browser. Fetching the page, its bundles, the crawl, the headers and the
+plain-HTTP address are requests any visitor already makes, and vibeward asks nothing to make
+them. It stops and asks exactly once — naming the service and the endpoint — if it finds a
+Supabase or Firebase backend in the bundles, because reading rows out of a data API is the part
+a visitor never does. Declining skips those probes and keeps the report, which records that they
+were declined. `--passive` skips them without being asked, and `--yes` answers in advance.
 
 The deeper server-side classes (IDOR/BOLA behind a login, rate limiting, orphaned datastores,
 business logic) are **not** claimed by an automated scan — they are the manual part of an audit.
 
 ## Run it
 
-No install:
+Always through `npx`, never installed:
 
 ```bash
 npx vibeward@latest https://client-app.lovable.app
 npx vibeward@latest init
 ```
 
-If you use it more than once, a global install is the same commands without the wait:
+There is deliberately no global install. A copy you install is a copy that stops moving, and
+the whole value of this thing is a rule set that keeps up with the phrasings people actually
+type and the platform defaults that keep changing. `npx vibeward@latest` means every scan you
+run uses the rules as they are today, with no step where you have to remember anything. The
+examples below drop the prefix for readability — put it back when you run them.
 
-```bash
-npm i -g vibeward
-vibeward https://client-app.lovable.app
-```
+**The guard hook is the one exception, and it is pinned, not installed.** A scan is something
+you run on purpose a few times a day, so paying `npx`'s registry round-trip for it is fine.
+The guard runs on *every prompt you type*, and `npx vibeward@latest` there would mean **every
+future version I publish executes on your machine without review** — if my npm account is ever
+compromised, that is instant code execution across every user, on their next keystroke. It also
+re-resolves against the registry every run, so offline would mean a failing hook.
 
-Either entry point is fine, including for setting up the guard — `init` resolves that part
-itself and **never writes `@latest` into your settings**. The examples below drop the prefix.
-
-**Why the guard hook is the exception.** A scan is something you run on purpose, a few times a
-day; paying `npx`'s registry round-trip for it is fine. The guard runs on *every prompt you
-type*, and there `npx vibeward@latest` costs you three things:
-
-```
-npx vibeward@latest guard   1.78s
-vibeward guard              0.16s   ← 11×
-```
-
-1.8 s added to every prompt, a hard dependency on the network (`@latest` re-resolves against
-the registry every run, so offline means a failing hook), and — the one that actually
-matters for a security tool — **every future version I publish executes on your machine
-without review.** If my npm account is ever compromised, `@latest` is instant code execution
-across every user, on their next keystroke. An installed binary is a version you chose.
+So `init` writes an exact version into your settings and `@latest` never reaches a
+`settings.json`. To raise it, re-run `npx vibeward@latest init`: it rewrites the pin in place
+and keeps any flags you added. That re-run is the update path — there is nothing to
+`npm update`.
 
 ## Guardrail — stop risky requests before they happen
 
@@ -249,32 +246,28 @@ and nothing else. That is roughly 40 entries a native speaker can review in five
 is the only way a rule set in a language you don't read ever gets audited. PRs adding a table
 are welcome; the benign corpus in `test/intent-test.ts` is what a new language has to pass.
 
-**`vibeward init` wires it up for you, from either entry point.** It looks for an installed
-`vibeward`, offers to install one if there is none, and pins to an exact version if you decline —
-so `npx vibeward@latest init` is a perfectly good way in, and `@latest` still never reaches your
-settings. Re-running it also repoints a hook an older version left on `@latest`, keeping any
-flags you added.
+**`vibeward init` wires it up for you.** It pins the hook to an exact version, so
+`npx vibeward@latest init` is the way in and `@latest` still never reaches your settings.
+Re-running it raises a pin an older version wrote — and repoints a hook left on `@latest` by a
+version that predates the pin — keeping any flags you added. That is how a hook gets updated;
+re-run it when the staleness notice asks you to.
 
-To do it by hand instead, install the binary and add it as a **Claude Code**
-`UserPromptSubmit` hook (in `~/.claude/settings.json` or a project's `.claude/settings.json`):
-
-```bash
-npm i -g vibeward
-```
+To do it by hand instead, add it as a **Claude Code** `UserPromptSubmit` hook (in
+`~/.claude/settings.json` or a project's `.claude/settings.json`), pinned to an exact version:
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "vibeward guard" }] }
+      { "hooks": [{ "type": "command", "command": "npx vibeward@0.5.1 guard" }] }
     ]
   }
 }
 ```
 
-Use the installed binary here, not `npx vibeward@latest` — see [Run it](#run-it) for why a
-hook that runs on every prompt is the one place `@latest` is a bad trade. Update on your own
-schedule with `npm i -g vibeward@latest`.
+Write a real version there, never `@latest` — see [Run it](#run-it) for why a hook that runs on
+every prompt is the one place `@latest` is a bad trade. Raise the pin by re-running
+`npx vibeward@latest init`, which rewrites it for you.
 
 **How you find out there is a newer one.** A pinned copy could quietly rot, so it keeps track
 of its own age: past 60 days, the guard adds one line asking you to update — but only when it
@@ -296,6 +289,31 @@ Add `--block` if you want the hard stop instead (`exit 2`): Claude Code then blo
 for everyone else. `--warn` still works as an alias of the default for older `settings.json` files.
 
 ## Install it into your AI tools
+
+### Claude Code: as a plugin
+
+```bash
+claude plugin marketplace add JSiapoDEV/vibeward
+claude plugin install vibeward@vibeward
+```
+
+That is the whole install. The skill and all three guard moments come with it, nothing is written
+into your `settings.json`, and `/plugin uninstall vibeward` takes every trace back out.
+
+The plugin carries its **own copy** of the CLI, so the guard that runs on the prompt you just
+typed resolves nothing from the network — 0.13 s against the 2.06 s a pinned `npx` costs even
+with a warm cache. There is no `npx @latest` anywhere in the path.
+
+That copy is a build artifact, and no build artifact is committed to `main`. It is produced on a
+release tag by [`publish-plugin.yml`](.github/workflows/publish-plugin.yml), on a clean runner,
+after the tests pass, and force-pushed to the orphan `plugin` branch that the marketplace entry
+points at. So it cannot drift from the source it was built from, and the repository you read is
+free of generated files.
+
+While the plugin is enabled, `vibeward` is also on the Bash tool's `PATH`, at the same pinned
+version — so the agent can audit a URL without installing anything either.
+
+### Every other editor: `init`
 
 ```bash
 npx vibeward@latest init
@@ -451,10 +469,11 @@ npm i -D playwright && npx playwright install chromium
 | `--supabase-url <url>` / `--anon-key <key>` | URL mode: Supabase config if not auto-detected |
 | `--no-rls` | URL mode: skip the Row-Level Security probe |
 | `--sarif <file>` | Write SARIF 2.1.0 (for GitHub code scanning) — security findings only |
-| `--out <file.md>` | Report path |
+| `--lang <en\|es>` | Report language, English by default. The CLI itself stays English |
+| `--out <file.md>` | Report path (default: `vibeward-report-<host>.md`, `informe-<host>.md` in Spanish) |
 | `--json` | Also dump raw findings as JSON |
 | `--stdout` | Print the JSON payload on stdout, everything else on stderr (implies `--yes`) |
-| `--yes` | Confirm authorization without the interactive prompt |
+| `--yes` | Pre-authorize the backend probes (Supabase/Firebase), skipping the prompt |
 
 Exit code `2` when critical **security** findings are present (useful in CI). Website findings
 never change it.
