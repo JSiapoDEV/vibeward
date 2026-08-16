@@ -13,77 +13,74 @@ export const MARK = `vibeward v${VERSION}`;
 export const MARKER_START = '<!-- vibeward:start -->';
 export const MARKER_END = '<!-- vibeward:end -->';
 
-/** The hook event that gates a prompt before the agent acts on it. */
-export const HOOK_EVENT = 'UserPromptSubmit';
-
-export interface HookHandler {
-  type: 'command';
-  command: string;
-  timeout?: number;
-}
-
-export interface HookGroup {
-  /** Omitted on purpose for UserPromptSubmit, which supports no matcher. */
-  matcher?: string;
-  hooks: HookHandler[];
-}
-
 /**
- * Everything a template needs to know about the machine it is being written on. The guard
- * command is resolved once per run (see `binary.ts`) instead of hardcoded, because what the
- * hook should run depends on whether there is an installed `vibeward` to run.
+ * Everything a template needs to know about the machine it is being written on and what the
+ * user asked for. The guard command is resolved once per run (see `binary.ts`) instead of
+ * hardcoded, because what the hook should run depends on whether there is an installed
+ * `vibeward` to run. The hook manifests themselves live in `hooks.ts` — seven native formats
+ * do not belong in the file that holds the prose.
  */
 export interface RenderContext {
   guardCommand: string;
   guardTimeout: number;
+  /** Which moments the user chose to guard. Empty means skill and rules only. */
+  moments: import('../guard/verdict.js').Moment[];
 }
 
-/**
- * One matcher group for the guard. UserPromptSubmit takes no `matcher`, but the group
- * object is still required — flattening this into a bare list of handlers silently stops
- * the hook from loading. No `args`, so the command runs through a shell.
- * `timeout` is explicit because UserPromptSubmit caps hooks at 30 s and a cold `npx`
- * download can need longer; a timeout cancels the hook and discards its output.
- */
-export function guardHook(ctx: RenderContext): HookGroup {
-  return {
-    hooks: [{ type: 'command', command: ctx.guardCommand, timeout: ctx.guardTimeout }],
-  };
-}
-
-/** What the merge into an existing settings.json will add, for the preview. */
-export function guardHookJson(ctx: RenderContext): string {
-  return JSON.stringify({ hooks: { [HOOK_EVENT]: [guardHook(ctx)] } }, null, 2);
-}
-
-const TITLE = '# vibeward — audit the deployed site, then fix what is safe to fix';
+const TITLE = '# vibeward — audit a deployed site and report what it finds';
 
 /**
  * Frontmatter `description` for every target that has one. No `: ` anywhere: a colon
  * followed by a space would end the plain YAML scalar and break the frontmatter.
  */
 const DESCRIPTION =
-  'Audit a deployed website or web app with the vibeward scanner and fix what it reports — SEO, metadata, AI visibility, broken assets and security. Use when the user asks to check, audit or improve a live URL, or right after a deploy.';
+  'Audit a deployed website or web app, or a code folder, with the vibeward scanner and report what it finds — exposed secrets, open database rules, SEO, metadata, AI visibility and broken assets. Use when the user asks to check, audit or review a live URL or a repo, or right after a deploy. Detects and reports only; it never fixes what it finds.';
 
 /**
  * The canonical text. Written as lines instead of a template literal so the markdown can
  * use backticks freely, which a skill body is made of.
  */
 export const INSTRUCTION = [
-  'vibeward is a deterministic scanner: it detects, you fix. Never the other way round.',
+  'vibeward is a deterministic scanner: it detects, you report. Never the other way round.',
   'You do not decide whether a tag, a file or a header is missing — vibeward does, and it is',
   'the only thing allowed to say so. If it is not in the report, it is not a finding.',
   '',
+  '**Your job is to tell the user what is wrong. It is not to make it go away.** vibeward is a',
+  'detector, not a repair tool, and so are you while you are using it. A scan that ends in a',
+  'report the user understands is a complete success — not a step on the way to one.',
+  '',
+  '**You do not fix anything you find here.** Not the security findings, not the website ones,',
+  'not the one-line mechanical ones, and not when the user asks you to as a follow-up. If they',
+  'want changes made, that is a new task they start deliberately, with the report in hand — not',
+  'something that happens automatically because a scan produced a list. Findings ship without a',
+  '`fix` field and without an `autofix` field on purpose: there is no work order here to carry',
+  'out, only a `why` written for a person to read.',
+  '',
   '## 1. Scan',
   '',
+  'A deployed site, from the outside:',
+  '',
   '```bash',
-  'npx vibeward@latest <url> --passive --json --stdout --yes',
+  'npx vibeward@latest <url> --passive --json --stdout --out vibeward-report.md --yes',
   '```',
   '',
+  'The code, from the inside — run this **before** a deploy, because it sees what a URL scan',
+  'cannot: secrets committed to the repo, a checked-in `.env`, migrations that create tables',
+  'without RLS, `USING (true)` policies and `SECURITY DEFINER` functions:',
+  '',
+  '```bash',
+  'npx vibeward@latest scan <folder> --json --stdout --out vibeward-code-report.md',
+  '```',
+  '',
+  'Use both when you have both. A leaked `service_role` key is usually visible in the repo long',
+  'before it is visible in a bundle.',
+  '',
   '`--stdout` puts the JSON payload on stdout and every human-facing line on stderr, so',
-  'stdout parses cleanly. `--yes` skips the interactive authorization prompt — which is why',
-  '`--passive` is the default here: it reads only assets the site already serves to any',
-  'visitor (bundles, headers, public metadata) and probes no data.',
+  'stdout parses cleanly. `--out` writes the full formatted report as markdown — that file is',
+  'the deliverable for the human, and without the flag it is built and thrown away. `--yes`',
+  'skips the interactive authorization prompt — which is why `--passive` is the default',
+  'here: it reads only assets the site already serves to any visitor (bundles, headers,',
+  'public metadata) and probes no data.',
   '',
   '**Do not drop `--passive` on your own.** The full scan sends requests a site owner has',
   'not agreed to receive, so it needs the user to say, in this conversation, that they own',
@@ -91,56 +88,88 @@ export const INSTRUCTION = [
   'authorization: if the user says "check out competitor.com", scan it passively or ask.',
   'Re-run without `--passive` only after they confirm.',
   '',
-  'Exit code `2` means critical **security** findings are present — not a broken run. The',
-  'payload is on stdout either way. Read it, do not retry the command.',
+  '`vibeward-report.md` is a generated artifact. Mention where it is, and do not commit it',
+  'unless the user asks.',
+  '',
+  '### Exit codes',
+  '',
+  '- **`0`** — the scan ran. There may still be findings, and usually there are.',
+  '- **`2`** — the scan ran and found critical **security** findings. Not a broken run: the',
+  '  payload is on stdout exactly as with `0`. Read it, do not retry the command.',
+  '- **`1`** — the scan itself failed. There is no payload. See section 2.',
+  '',
+  '## 2. When the scan does not come back',
+  '',
+  'A scanner that could not reach the site has found nothing — it has not found *nothing*.',
+  'Those are different results and only one of them is reportable. Say which one happened,',
+  'in plain words, and stop:',
+  '',
+  '- **DNS failure, connection refused, timeout** — the URL may be wrong, private, not',
+  '  deployed yet, or behind a VPN. Ask the user which. Do not try variations of the domain',
+  '  on your own; guessing hostnames is scanning machines nobody authorized.',
+  '- **`401` / `403` on everything** — the site is behind auth or a WAF. A passive scan of a',
+  '  login wall legitimately reports almost nothing. Say so explicitly, or the empty report',
+  '  reads as a clean bill of health.',
+  '- **Heavy client-side rendering** — the scan reads what the server sends. If the HTML is',
+  '  an empty `<div id="root">`, that is itself a finding vibeward reports, not a scan error.',
+  '- **The command is missing or the network is down** — report the failure. Do not fall back',
+  '  to `curl`, `WebFetch` or reading the repo and calling the result an audit.',
+  '',
+  'Retry once if it looks transient. After that, report the failure and let the user decide.',
+  'Never substitute your own reading of a page for a scan that did not run.',
+  '',
+  '## 3. Report — this is the deliverable',
+  '',
+  'Write the summary in chat and point at `vibeward-report.md` for the detail. The whole',
+  'value of a deterministic scanner is that the numbers are not yours, so do not launder',
+  'them through your own judgement:',
+  '',
+  '- **Lead with `impact`, not with the count.** "Anyone can read every row of `profiles`"',
+  '  lands; "3 high, 6 medium" does not.',
+  '- **Quote `evidence` verbatim.** It holds the real numbers, the real URLs, the real key',
+  '  prefix. Paraphrasing it is how a finding quietly loses its proof.',
+  '- **Never restate a severity in your own words.** If vibeward says critical, it is',
+  '  critical — you do not get to call it "worth looking at eventually".',
+  '- **List the affected pages** from `meta.pages` instead of saying "several pages".',
+  '- **Report what was silenced.** Anything in `suppressed` was hidden by a config file, with',
+  '  a `reason`. A user reading a clean report deserves to know what is not in it.',
+  '- **Do not pad.** If there are no findings, that is one sentence, not a page of reassurance.',
   '',
   'The payload:',
   '',
   '```json',
   '{',
-  '  "schemaVersion": 1,',
+  '  "schemaVersion": 2,',
   '  "verdict": "...",',
   '  "counts":    { "critical": 0, "high": 1, "medium": 2, "low": 3 },',
   '  "webCounts": { "critical": 0, "high": 2, "medium": 6, "low": 2 },',
   '  "fingerprint": { "score": 9, "total": 12, "signals": ["..."] },',
-  '  "findings": [{ "id": "...", "kind": "web", "autofix": "auto", "fix": "..." }]',
+  '  "findings": [{ "id": "...", "kind": "web", "severity": "high", "evidence": "..." }]',
   '}',
   '```',
   '',
   'Every finding carries `id`, `label`, `severity`, `evidence` (the real numbers), `impact`',
-  '(what it costs the business), `why`, and usually `fix` (the concrete snippet) and',
-  '`autofix` (how far you may go alone). `meta.pages` lists the URLs affected.',
+  '(what it costs the business) and `why` (what it is and what a correct one looks like).',
+  '`meta.pages` lists the URLs affected. There is no `fix` and no `autofix` — see the top of',
+  'this file.',
   '',
-  '## 2. Split by kind',
+  '## 4. Split by kind',
   '',
-  '**`kind: "security"`** (or no `kind` at all) — **do not fix these.** Report them to the',
-  'human and stop there. A security finding usually means something is already exposed, such',
-  'as a service key sitting in a bundle or a table readable without authentication. Deleting',
-  'the line does not un-leak the key — it has to be rotated, and only the owner decides when,',
-  'how, and whether the incident has to be disclosed. Quietly patching it hides an incident.',
+  '**`kind: "security"`** (or no `kind` at all) — **do not fix these, ever, even if asked.**',
+  'Report them and stop there. A security finding usually means something is already exposed,',
+  'such as a service key sitting in a bundle or a table readable without authentication.',
+  'Deleting the line does not un-leak the key — it has to be rotated, and only the owner',
+  'decides when, how, and whether the incident has to be disclosed. Quietly patching it hides',
+  'an incident. Tell the user what to rotate and in what order, and let them do it.',
   '',
-  '**`kind: "web"`** — quality and visibility. These you can work on, following `autofix`.',
+  '**`kind: "web"`** — quality and visibility. Report these the same way. They are not a',
+  'lesser category you are allowed to go and fix; they are the category that is not urgent.',
   '',
-  '## 3. Fix by autofix',
+  '## 5. When the user says they do not care about a finding',
   '',
-  '- **`auto`** — apply `fix` as written. It is mechanical: a canonical tag, a sitemap, a',
-  '  `lang` attribute, a robots.txt line. No judgement, no business knowledge involved.',
-  '- **`needs-input`** — the fix needs real facts about this business: what it actually',
-  '  sells, to whom, where, what the photo actually shows. Take them from the copy already',
-  '  on the site, from the README, or ask the user. `fix` ships placeholders (Acme,',
-  '  "bookkeeping for freelancers") — never leave one in, and never invent a claim the',
-  '  business has not made. A generic meta description is worse than none, because it looks',
-  '  written and so nobody ever writes the real one.',
-  '- **`manual`** — report it, do not touch it. Empty client-rendered HTML, console errors',
-  '  and heavy bundles are architecture decisions, not text edits.',
-  '',
-  'Edit the source, not the build output: `index.html`, the page components, `public/`.',
-  'Anything written into `dist/` is erased by the next build.',
-  '',
-  '## 3b. When the user does not want a fix',
-  '',
-  'Record the decision in `vibeward.json` instead of asking again on the next run. A `reason`',
-  'is required, and it ends up printed in the report — so write the real one:',
+  'That is a reporting decision, not a fix, and it is the one thing you may write to disk here.',
+  'Record it in `vibeward.json` so the next run does not ask again. A `reason` is required, and',
+  'it is printed in the report — so write the real one, not "not needed":',
   '',
   '```json',
   '{',
@@ -154,24 +183,26 @@ export const INSTRUCTION = [
   'opposite — that the block is actually complete. And only `kind: "web"` ids can be',
   'suppressed; a security finding cannot be silenced by a file, by design.',
   '',
-  '## 4. Verify',
+  '## 6. Re-scanning',
   '',
-  'Re-run the exact same command and compare `findings`. Detect, fix, re-detect: the scanner',
-  'is the test suite and you are the code under test.',
+  'You are done at section 3. Do not re-run the scan to produce a second identical report.',
   '',
-  '- Deploy first when the site is built and served from a host. A local edit is invisible',
-  '  to a scanner reading the live URL.',
-  '- A finding that disappeared is fixed. A finding still there means the edit did not land.',
-  '- **Three rounds maximum.** If something survives three, stop and tell the user what is',
-  '  left and what you tried. Repeating a failing edit burns their tokens and their patience.',
+  'The one time to re-scan is when the **user** tells you they have changed and deployed',
+  'something and asks whether it worked. Then run the exact same command and compare',
+  '`findings`: an id that disappeared is closed, an id still there means the change did not',
+  'reach the live site — often because it was never deployed, since a local edit is invisible',
+  'to a scanner reading a URL.',
   '',
   '## Never',
   '',
   '- Never say something is missing, or fixed, because you read the HTML yourself. Run the',
   '  scan and quote its `evidence`.',
-  '- Never fix a `kind: "security"` finding on your own.',
-  '- Never fill a `needs-input` fix with placeholder or invented copy.',
-  '- Never commit, push or deploy unless the user asked for it.',
+  '- Never report a scan that failed as a scan that found nothing.',
+  '- **Never fix a finding.** Not security, not web, not the one-line ones, not on request.',
+  '  Report it and let the user decide what to do with their own site.',
+  '- Never edit a file, open a PR or deploy as part of an audit. The only file you may write',
+  '  is `vibeward.json`, and only to record a suppression the user asked for.',
+  '- Never invent a claim about the business to fill a gap the report describes.',
 ].join('\n');
 
 /** Title + body, the shape every markdown-ish target shares. */
@@ -180,12 +211,19 @@ function body(): string {
 }
 
 /**
- * `.claude/skills/vibeward/SKILL.md`. Only `name` and `description` are emitted: those are
- * the two the open Agent Skills standard requires, and the upload paths (claude.ai, the
- * Skills API) reject any field outside the standard six. `name` must equal the parent
- * directory name, and the slash command comes from that directory, not from this field.
+ * `<host>/skills/vibeward/SKILL.md` — the same file for every host.
+ *
+ * Only `name` and `description` are emitted. Those are the two fields the open Agent Skills
+ * standard defines, every host here reads both, and the upload paths (claude.ai, the Skills
+ * API) reject anything outside the standard set. `name` must equal the parent directory name,
+ * and on most hosts the invocation comes from that directory rather than from this field — so
+ * the folder has to stay called `vibeward`.
+ *
+ * One body, seven destinations. The per-host rule files this used to generate (`.cursor/rules`,
+ * `.devin/rules`) are gone: SKILL.md replaced them at every host that had one, and three
+ * formats carrying identical prose was three chances to let them drift.
  */
-export function claudeSkill(): string {
+export function skillFile(): string {
   return [
     '---',
     'name: vibeward',
@@ -199,38 +237,57 @@ export function claudeSkill(): string {
 }
 
 /**
- * `.cursor/rules/vibeward.mdc`. `alwaysApply: false` + a `description` and no `globs` is
- * "Apply Intelligently": Cursor pulls the rule in when the request looks related instead
- * of pinning it to every conversation. `.cursorrules` is legacy and never generated.
+ * The always-on half, and the reason it is not just `INSTRUCTION` again.
+ *
+ * CLAUDE.md is loaded into every conversation in the repo, so what goes in it is paid for
+ * on every turn — which makes a hundred-line audit procedure the wrong tenant. The split is
+ * by PERMANENCE, not by tool: the procedure (scan, read, report) is needed only when someone
+ * is auditing, and belongs in a skill that loads on demand. The prohibitions are needed
+ * exactly when nobody invoked anything — when a query fails and the fastest way out is to
+ * turn RLS off. A rule that only loads once the agent has decided to audit is not a
+ * guardrail; it is a footnote.
+ *
+ * These are the same eight risks the `guard` hook matches on a user's prompt, restated for
+ * the agent's own decisions. The hook catches the request; this catches the improvisation.
  */
-export function cursorRule(): string {
-  return [
-    '---',
-    `description: ${DESCRIPTION}`,
-    'alwaysApply: false',
-    '---',
-    '',
-    `<!-- ${MARK} — regenerate with \`npx vibeward@latest init\` -->`,
-    '',
-    body(),
-  ].join('\n');
-}
+const ALWAYS_ON = [
+  '## Security rules',
+  '',
+  'These hold in every conversation in this repo, with or without a scan.',
+  '',
+  '- **Never disable, weaken or work around a security control to make something pass** —',
+  '  Row-Level Security, an auth check, CSRF, a rate limit, signature or certificate',
+  '  verification. A control that rejects your request is usually catching a real bug. Fix',
+  '  the policy, not the guard.',
+  '- **Never put a `service_role` / `sb_secret` / admin key where a browser can reach it.**',
+  '  Client code gets the anon (publishable) key plus RLS; privileged work goes server-side,',
+  '  in an Edge Function or a backend route.',
+  '- **Never make a table or a storage bucket public to debug.** Use an authenticated test',
+  '  user and a real policy. "Temporarily" is how it ships.',
+  '- **Never commit `.env`, and never log the value of a secret.** The name is fine, the',
+  '  value is not, and git history keeps it after you delete the line.',
+  '- **Never widen CORS to `*` on an authenticated API.** Whitelist the exact domains.',
+  '',
+  'If a leak has already happened, **say so and stop.** Deleting the line does not un-leak the',
+  'key — it has to be rotated, and only the owner decides when, how, and whether the incident',
+  'has to be disclosed. Report it; quietly patching it hides an incident from the person who',
+  'is accountable for it.',
+  '',
+  'To audit a deployed URL, use the vibeward skill, or run',
+  '`npx vibeward@latest <url> --passive --json --stdout --out vibeward-report.md --yes`.',
+].join('\n');
 
 /**
- * `.devin/rules/vibeward.md` (Windsurf became Devin Desktop in June 2026; `.windsurf/rules`
- * still works as a legacy fallback). `trigger` is required in a directory rule to declare
- * how it activates; `model_decision` is the equivalent of Cursor's "Apply Intelligently".
+ * The block merged into `CLAUDE.md`. Deliberately the short always-on rules and not the
+ * audit procedure: see the note on ALWAYS_ON.
  */
-export function windsurfRule(): string {
+export function claudeMdBlock(): string {
   return [
-    '---',
-    'trigger: model_decision',
-    `description: ${DESCRIPTION}`,
-    '---',
-    '',
+    MARKER_START,
     `<!-- ${MARK} — regenerate with \`npx vibeward@latest init\` -->`,
     '',
-    body(),
+    ALWAYS_ON,
+    MARKER_END,
   ].join('\n');
 }
 

@@ -47,7 +47,11 @@ import {
   resolveGuard,
   upgradeGuardCommand,
 } from '../src/init/binary.js';
-import { guardHookJson } from '../src/init/templates.js';
+import { hookFile } from '../src/init/hooks.js';
+import { HOSTS } from '../src/init/capabilities.js';
+import type { Moment } from '../src/guard/verdict.js';
+
+const ALL_MOMENTS: Moment[] = ['prompt', 'action', 'content'];
 import { RELEASED, VERSION, ageInDays, stalenessNotice } from '../src/core/version.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -735,9 +739,14 @@ console.log('\n22. Website — findings and aggregation');
     bad.every((f) => f.check === undefined && f.cwe === undefined),
     'website findings carry no security checklist item or CWE',
   );
+  // The inverse of what this suite used to assert, and deliberately so. vibeward reports and
+  // never fixes, so no finding may carry a field shaped like a work order for an agent. The
+  // remediation belongs in `why`, addressed to a person.
   assert(
-    bad.every((f) => typeof f.fix === 'string' && f.fix.length > 0 && f.autofix !== undefined),
-    'every website finding carries a concrete fix and an autofix level — the agent contract',
+    bad.every(
+      (f) => !('fix' in f) && !('autofix' in f) && typeof f.why === 'string' && f.why.length > 0,
+    ),
+    'no website finding carries fix/autofix, and every one explains itself in why — the contract',
   );
   assert(new Set(badIds).size === badIds.length, 'one finding per problem, never one per page');
   assert(
@@ -842,8 +851,6 @@ console.log('\n24. Isolation — website findings never gate security');
     severity: 'medium',
     kind: 'web',
     why: 'test',
-    fix: '<link rel="canonical" href="https://x.test/" />',
-    autofix: 'auto',
   };
   const webHigh: Finding = {
     id: 'web_robots_blocks_ai',
@@ -851,8 +858,6 @@ console.log('\n24. Isolation — website findings never gate security');
     severity: 'high',
     kind: 'web',
     why: 'test',
-    fix: 'Allow: /',
-    autofix: 'auto',
   };
 
   const mixed = buildReport({
@@ -967,9 +972,12 @@ console.log('\n25. Regressions caught by the adversarial review');
       f !== undefined && !f.evidence!.includes('User-agent: *'),
       'the evidence never claims a `User-agent: *` line the file does not have',
     );
+    // The finding no longer carries a `fix`, but the hazard it guarded against is unchanged:
+    // whoever acts on this must not replace robots.txt wholesale, because that silently
+    // deletes the Disallow rules the owner does want. The scoping now lives in `why`.
     assert(
-      f !== undefined && f.fix!.includes('delete this line only'),
-      'the auto-applied fix is surgical, it never hands over a whole replacement robots.txt',
+      f !== undefined && f.why.includes('Disallow: /') && /every other line|must stay/i.test(f.why),
+      'the report scopes the change to one line, never to a whole replacement robots.txt',
     );
   }
 }
@@ -1170,14 +1178,28 @@ console.log('\n27. Guard hook command — never @latest in a settings.json');
     'the npx fallback gets the longer timeout — a cold download needs it',
   );
 
+  // Every host's manifest, not just Claude Code's: `@latest` reaching any settings file is
+  // the failure, and there are seven files it could reach now.
   for (const ctx of [
-    { guardCommand: 'vibeward guard', guardTimeout: 10 },
-    { guardCommand: pinnedNpxGuard('9.9.9'), guardTimeout: 60 },
+    { guardCommand: 'vibeward guard', guardTimeout: 10, moments: ALL_MOMENTS },
+    { guardCommand: pinnedNpxGuard('9.9.9'), guardTimeout: 60, moments: ALL_MOMENTS },
   ]) {
-    assert(
-      !guardHookJson(ctx).includes('@latest'),
-      `the rendered hook never contains @latest (${ctx.guardCommand})`,
-    );
+    for (const host of HOSTS) {
+      if (!host.hooks) continue;
+      const rendered = hookFile(host, ctx, ALL_MOMENTS);
+      // The GUARD command is what must never float: it runs on every turn, and `@latest`
+      // there means executing whatever was published last, unreviewed. The `regenerate with
+      // npx vibeward@latest init` hint in the header comment is a different thing — a human
+      // running init on purpose — and is deliberately allowed to float.
+      assert(
+        !/vibeward@latest\s+guard/.test(rendered),
+        `${host.id}: the guard command is never @latest (${ctx.guardCommand})`,
+      );
+      assert(
+        rendered.includes(ctx.guardCommand),
+        `${host.id}: the rendered hook actually runs the resolved command`,
+      );
+    }
   }
 
   // Migrating the hooks an older vibeward already wrote.

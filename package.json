@@ -1,7 +1,7 @@
 {
   "name": "vibeward",
-  "version": "0.4.0",
-  "description": "Stops the insecure prompt before your AI agent runs it — and audits what it already shipped. A deterministic guardrail (no LLM call) for Claude Code that catches \"disable RLS\" or \"use the service_role key in the frontend\" in English, Spanish and Portuguese, plus a read-only scanner for exposed secrets, open Supabase RLS and Firebase leaks in Lovable / Bolt / v0 apps.",
+  "version": "0.5.0",
+  "description": "Stops the insecure prompt before your AI agent runs it — and audits what it already shipped. A deterministic guardrail (no LLM call) for Claude Code, Cursor, Codex, Copilot, Gemini, Windsurf and opencode that catches \"disable RLS\" or \"use the service_role key in the frontend\" in English, Spanish and Portuguese, plus a read-only scanner for exposed secrets, open Supabase RLS and Firebase leaks in Lovable / Bolt / v0 apps. It reports; it never edits your code.",
   "type": "module",
   "bin": {
     "vibeward": "dist/cli.js"
@@ -11,11 +11,11 @@
   "scripts": {
     "build": "rm -rf dist && tsc",
     "dev": "tsx src/cli.ts",
-    "test": "tsx test/self-test.ts && tsx test/prompt-test.ts && tsx test/intent-test.ts",
+    "test": "tsx test/self-test.ts && tsx test/prompt-test.ts && tsx test/intent-test.ts && tsx test/injection-test.ts && tsx test/hosts-test.ts && tsx test/contract-test.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -33,7 +33,12 @@
     "seo-audit",
     "llms-txt",
     "ai-visibility",
-    "agent-skill"
+    "agent-skill",
+    "cursor",
+    "codex",
+    "copilot",
+    "prompt-injection",
+    "agent-skills"
   ],
   "peerDependencies": {
     "playwright": "*"

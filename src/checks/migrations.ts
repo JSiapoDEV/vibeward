@@ -12,6 +12,37 @@ function lineAt(text: string, index: number): number {
 const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?["'`]?(\w+)["'`]?/gi;
 const ENABLE_RLS =
   /alter\s+table\s+(?:public\.)?["'`]?(\w+)["'`]?\s+enable\s+row\s+level\s+security/gi;
+/**
+ * Turning protection off on a table that already has it. Distinct from `CREATE TABLE` without
+ * RLS: that is a gap someone left, this is a decision someone made, and it is the exact shape
+ * of "just disable RLS so the query works". A table can only be disabled if it was protected,
+ * so this is always a regression and never a starting state.
+ */
+/**
+ * Every form the real tools emit. `ALTER TABLE ONLY "public"."profiles"` is what `pg_dump`
+ * writes, `IF EXISTS` is what a defensive migration writes, and a quoted schema is what
+ * Supabase Studio writes — a pattern that only handled the bare `public.` prefix missed all
+ * three, which between them cover most migrations that are not typed by hand.
+ */
+const QUALIFIED = '(?:["\'`]?\\w+["\'`]?\\s*\\.\\s*)?["\'`]?(\\w+)["\'`]?';
+const DISABLE_RLS = new RegExp(
+  `alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?${QUALIFIED}\\s+disable\\s+row\\s+level\\s+security`,
+  'gi',
+);
+
+/**
+ * Dropping a policy leaves RLS enabled and matching nothing, which denies everyone — or, if it
+ * was the last policy on a table someone then "fixes" by disabling RLS, opens everything.
+ *
+ * The policy name accepts a quoted string with spaces, because that is Supabase's own default:
+ * the dashboard names policies things like `"Enable read access for all users"`, and a
+ * name pattern that stopped at the first space could not match a single one of them.
+ */
+const DROP_POLICY = new RegExp(
+  `drop\\s+policy\\s+(?:if\\s+exists\\s+)?(?:"[^"]+"|'[^']+'|\`[^\`]+\`|[\\w-]+)\\s+on\\s+(?:only\\s+)?${QUALIFIED}`,
+  'gi',
+);
+
 const PERMISSIVE_POLICY = /create\s+policy[\s\S]{0,240}?using\s*\(\s*true\s*\)/gi;
 const SECURITY_DEFINER = /security\s+definer/gi;
 const GRANT_TO_ANON =
@@ -53,6 +84,45 @@ export function analyzeMigrations(
 
     ENABLE_RLS.lastIndex = 0;
     while ((m = ENABLE_RLS.exec(content)) !== null) rlsEnabled.add(m[1]!.toLowerCase());
+
+    DISABLE_RLS.lastIndex = 0;
+    while ((m = DISABLE_RLS.exec(content)) !== null) {
+      const name = m[1]!.toLowerCase();
+      findings.push({
+        id: `rls_turned_off_${name}`,
+        label: `Row Level Security is switched off on \`${name}\``,
+        severity: 'critical',
+        check: 6,
+        cwe: 'CWE-863',
+        source: `${path}:${lineAt(content, m.index)}`,
+        evidence: m[0].replace(/\s+/g, ' '),
+        exploit:
+          'Once RLS is off, every policy on the table stops applying and the whole table is readable — and often writable — through the public REST API with the anon key that ships in the browser bundle.',
+        impact: `Every row of \`${name}\` is exposed to anyone who opens the site and reads its network traffic. If the table holds user data, this is a live data leak for as long as the migration has been applied.`,
+        why: 'Disabling RLS is the usual reflex when a query returns no rows, because it makes the error go away. The error was the protection working: the fix is a policy that matches the intended rows, such as `USING (auth.uid() = user_id)`.',
+        references: ['https://supabase.com/docs/guides/database/postgres/row-level-security'],
+        meta: { table: name },
+      });
+    }
+
+    DROP_POLICY.lastIndex = 0;
+    while ((m = DROP_POLICY.exec(content)) !== null) {
+      const name = m[1]!.toLowerCase();
+      findings.push({
+        id: `policy_dropped_${name}`,
+        label: `A policy is dropped from \`${name}\``,
+        severity: 'medium',
+        check: 6,
+        cwe: 'CWE-863',
+        source: `${path}:${lineAt(content, m.index)}`,
+        evidence: m[0].replace(/\s+/g, ' '),
+        exploit:
+          'A table with RLS enabled and no policies matches nothing and denies everyone, which reads as a broken app — and the usual next step is to disable RLS rather than to write the policy back.',
+        why: 'Dropping a policy is only safe when another one still grants the access the app needs. Check what remains on the table before applying this.',
+        references: ['https://supabase.com/docs/guides/database/postgres/row-level-security'],
+        meta: { table: name },
+      });
+    }
 
     PERMISSIVE_POLICY.lastIndex = 0;
     while ((m = PERMISSIVE_POLICY.exec(content)) !== null) {

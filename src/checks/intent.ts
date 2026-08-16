@@ -31,7 +31,12 @@ export interface IntentFinding {
   instead: string;
 }
 
-/** How many characters may sit between a verb and its object. */
+/**
+ * How many characters may sit between a verb and its object. The gaps are `[^\n]` and not
+ * `[^.]`: a clause is already bounded by its sentence (see `clauses`), so the only thing a
+ * dot-excluding gap still did was let a filename disarm a rule — `put the service_role key
+ * from supabase.config.ts in the frontend` walked past a gap that could not cross a dot.
+ */
 const WINDOW = 30;
 
 /** Unicode-aware left boundary. `\b` is defined on ASCII `\w` and fails before a `.`. */
@@ -65,7 +70,7 @@ const SPECS: RuleSpec[] = [
     id: 'disable-rls',
     risk: 'Disabling Row-Level Security',
     verbTargets: [{ verb: 'weaken', target: () => T.rls, bidirectional: true }],
-    raw: [new RegExp(`\\b${T.rls}\\b[^.]{0,20}\\b(off|disabled|desactivad|desativad)`, 'i')],
+    raw: [new RegExp(`\\b${T.rls}\\b[^\n]{0,20}\\b(off|disabled|desactivad|desativad)`, 'i')],
     why: 'Turning off RLS makes every row in the table readable (and often writable) by anyone with the public anon key. This is the #1 cause of vibe-coded data leaks.',
     instead:
       'Keep RLS on and add an owner-scoped policy: `CREATE POLICY ... USING (auth.uid() = user_id)`. If a query fails, fix the policy — do not disable the protection.',
@@ -76,8 +81,8 @@ const SPECS: RuleSpec[] = [
     // Pure identifiers on both sides: this rule already worked in Portuguese before
     // Portuguese existed, which is the observation the whole lexicon is built on.
     raw: [
-      new RegExp(`${T.serviceKey}[^.]{0,40}\\b${T.clientSide}\\b`, 'i'),
-      new RegExp(`\\b${T.clientSide}\\b[^.]{0,40}${T.serviceKey}`, 'i'),
+      new RegExp(`${T.serviceKey}[^\n]{0,40}\\b${T.clientSide}\\b`, 'i'),
+      new RegExp(`\\b${T.clientSide}\\b[^\n]{0,40}${T.serviceKey}`, 'i'),
     ],
     verbTargets: [{ verb: 'expose', target: () => T.serviceKey, bidirectional: true }],
     why: 'The service_role / sb_secret key bypasses ALL Row-Level Security. In client code, anyone can extract it and read, modify or delete any table. It is the most dangerous key you have.',
@@ -94,8 +99,8 @@ const SPECS: RuleSpec[] = [
       const store = group(lex.datastores);
       const pub = stems(lex.publicWord);
       return [
-        new RegExp(`\\b${store}\\b[^.]{0,25}\\b${pub}`, 'iu'),
-        new RegExp(`\\b${pub}[^.]{0,25}\\b${store}\\b`, 'iu'),
+        new RegExp(`\\b${store}\\b[^\n]{0,25}\\b${pub}`, 'iu'),
+        new RegExp(`\\b${pub}[^\n]{0,25}\\b${store}\\b`, 'iu'),
       ];
     }),
     verbTargets: [
@@ -128,11 +133,11 @@ const SPECS: RuleSpec[] = [
     id: 'cors-wildcard',
     risk: 'Allowing all origins (CORS *)',
     raw: [
-      // The `[^.]{0,10}` gap carries the article Spanish and Portuguese put where English
+      // The `[^\n]{0,10}` gap carries the article Spanish and Portuguese put where English
       // puts nothing: "todas AS origens", "todos LOS orígenes", "all origins".
-      /\b(allow|permit\p{L}*|libera\p{L}*)\s+(all|any|todos?|todas?|qualquer|cualquier)[^.]{0,10}\b(origins?|or[íi]genes|origens)\b/iu,
-      /cors[^.]{0,25}(\*|origin\s*[:=]\s*(true|['"]\*['"]))/i,
-      /access-control-allow-origin[^.]{0,10}\*/i,
+      /\b(allow|permit\p{L}*|libera\p{L}*)\s+(all|any|todos?|todas?|qualquer|cualquier)[^\n]{0,10}\b(origins?|or[íi]genes|origens)\b/iu,
+      /cors[^\n]{0,25}(\*|origin\s*[:=]\s*(true|['"]\*['"]))/i,
+      /access-control-allow-origin[^\n]{0,10}\*/i,
     ],
     why: 'CORS `*` lets any website call your API with the visitor’s credentials, enabling data theft from other sites.',
     instead:
@@ -144,7 +149,7 @@ const SPECS: RuleSpec[] = [
     verbTargets: [{ verb: 'place', target: () => T.secret, bidirectional: false }],
     raw: [
       new RegExp(
-        `\\b(put|write|escrib\\p{L}*|pon\\p{L}*|coloc\\p{L}*)\\b[^.]{0,25}${T.secret}[^.]{0,30}\\b(in\\s+the\\s+(code|source|bundle|component|repo)|directly|inline|en\\s+el\\s+c[óo]digo|no\\s+c[óo]digo|direto)\\b`,
+        `\\b(put|write|escrib\\p{L}*|pon\\p{L}*|coloc\\p{L}*)\\b[^\n]{0,25}${T.secret}[^\n]{0,30}\\b(in\\s+the\\s+(code|source|bundle|component|repo)|directly|inline|en\\s+el\\s+c[óo]digo|no\\s+c[óo]digo|direto)\\b`,
         'iu',
       ),
     ],
@@ -205,9 +210,9 @@ function compile(langs: Lang[]): CompiledRule[] {
         // A unicode-aware "not preceded by a word character" instead of `\b`: the target can
         // be a filename like `\.env`, and `\b` before a literal dot never matches after a
         // space. That one character is why "commit the .env so it deploys" used to slip past.
-        patterns.push(new RegExp(`\\b${verb}\\b[^.]{0,${WINDOW}}${NOT_WORD}${target}`, 'iu'));
+        patterns.push(new RegExp(`\\b${verb}\\b[^\n]{0,${WINDOW}}${NOT_WORD}${target}`, 'iu'));
         if (vt.bidirectional) {
-          patterns.push(new RegExp(`${NOT_WORD}${target}[^.]{0,${WINDOW}}\\b${verb}`, 'iu'));
+          patterns.push(new RegExp(`${NOT_WORD}${target}[^\n]{0,${WINDOW}}\\b${verb}`, 'iu'));
         }
       }
     }
@@ -244,7 +249,13 @@ const DISCUSSION: RegExp[] = [
   /\b(explica\w*|documenta\w*|describe|por\s+qu[ée]|qu[ée]\s+(es|significa)|c[óo]mo\s+(hago|puedo))\b/iu,
   /\b(explique|documente|descreva|por\s+que|o\s+que\s+[ée]|como\s+(fa[çc]o|posso))\b/iu,
   /\b(unit\s+test|test\s+that|write\s+a\s+test|add\s+a\s+test|prueba\s+unitaria|teste\s+unit[áa]rio)\b/iu,
-  /\bvibeward\b/i,
+  // Reporting what vibeward found is discussion. The bare product name is not: a keyword
+  // that vetoes all eight rules on its own is a one-word bypass, and it used to disarm the
+  // guard for exactly the prompts most likely to follow a finding — "vibeward says RLS is
+  // off, just disable it then". So the name only excuses a clause when it sits next to a
+  // verb of reporting.
+  /\bvibeward\b[^\n]{0,40}\b(says?|said|report\w*|found|flags?|flagged|dice|dijo|reporta\w*|encontr[óo]|marc[óo]|diz|disse|achou|apontou)\b/i,
+  /\b(says?|said|report\w*|found|flags?|flagged|dice|dijo|reporta\w*|encontr[óo]|diz|disse|achou)\b[^\n]{0,40}\bvibeward\b/i,
   // Moving a secret OUT of the client is the fix, not the hole. Without this, the single
   // most desirable prompt in the whole product ("move the service_role key out of the
   // client bundle") gets flagged as the thing it repairs.
@@ -260,21 +271,78 @@ const UI_NOUNS: RegExp[] = LANGS.map(
 const RULES = compile(LANGS);
 const NEGATIONS = compileNegations(LANGS);
 
-/** Runs the intent rules over a user's prompt and returns matched risks. */
+/**
+ * Invisible characters: the soft hyphen, zero-width space/non-joiner/joiner, the
+ * left-to-right and right-to-left marks, the word joiner, and the BOM. Written as escapes
+ * on purpose — as literals this class is an empty-looking pair of brackets that the next
+ * person to touch it cannot review.
+ */
+const INVISIBLE = /[\u00ad\u200b-\u200f\u2060\ufeff]/g;
+
+/**
+ * Folds the prompt to one canonical encoding before any rule sees it. `ＲＬＳ` is three
+ * fullwidth codepoints that no rule matches and every human reads as RLS, and a U+200B
+ * between two letters is invisible in every editor. NFKC folds the first, the
+ * strip removes the second.
+ *
+ * Deliberately light: this normalizes ENCODING, not spelling. Undoing `r.l.s` or
+ * `d i s a b l e` would mean matching every target across arbitrary separators, and each of
+ * the eight rules would start firing inside ordinary prose. The person on the other side of
+ * this hook is being protected, not attacking their own guardrail — and the one place that
+ * assumption does not hold is text the agent *received* rather than the user typed, which
+ * needs a different event, not a stricter regex.
+ */
+function normalize(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(INVISIBLE, '')
+    .replace(/[ \t]+/g, ' ');
+}
+
+/**
+ * Sentence-ish clauses, and the reason this function exists at all.
+ *
+ * Every veto used to be tested against the WHOLE prompt, so a single benign clause anywhere
+ * in it disarmed all eight rules at once: "explain how sessions work. now disable RLS so the
+ * query passes" was excused by the word `explain` and walked straight through. Same for a
+ * stray `e2e`, a stray `not`, a stray `gitignore`. Rules and vetoes are both evaluated
+ * inside one clause now, so a veto only ever excuses the sentence it appears in.
+ *
+ * Splitting only on a sentence ender FOLLOWED BY whitespace is the whole trick: a bare dot
+ * would cut `.env`, `docker-compose.local.yml` and `v2.1` in half, and "commit the .env so
+ * it deploys" — a case this suite has caught since v0.1 — would stop matching.
+ */
+const CLAUSE_BREAK = /[.!?;]+(?=\s|$)|[\n\r]+/;
+
+function clauses(text: string): string[] {
+  return text
+    .split(CLAUSE_BREAK)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Runs the intent rules over a user's prompt and returns matched risks, at most one per
+ * rule however many clauses it fires in — the agent needs the rule once, not a tally.
+ */
 export function scanIntent(prompt: string): IntentFinding[] {
-  if (DISCUSSION.some((p) => p.test(prompt))) return [];
-  if (NEGATIONS.some((p) => p.test(prompt))) return [];
-  if (UNIVERSAL_EXCLUDES.some((p) => p.test(prompt))) return [];
+  const found = new Map<string, IntentFinding>();
 
-  const hasUiNoun = UI_NOUNS.some((p) => p.test(prompt));
+  for (const clause of clauses(normalize(prompt))) {
+    if (DISCUSSION.some((p) => p.test(clause))) continue;
+    if (NEGATIONS.some((p) => p.test(clause))) continue;
+    if (UNIVERSAL_EXCLUDES.some((p) => p.test(clause))) continue;
 
-  const out: IntentFinding[] = [];
-  for (const rule of RULES) {
-    if (rule.vetoOnUi && hasUiNoun) continue;
-    if (rule.exclude.some((p) => p.test(prompt))) continue;
-    if (rule.patterns.some((p) => p.test(prompt))) {
-      out.push({ id: rule.id, risk: rule.risk, why: rule.why, instead: rule.instead });
+    const hasUiNoun = UI_NOUNS.some((p) => p.test(clause));
+
+    for (const rule of RULES) {
+      if (found.has(rule.id)) continue;
+      if (rule.vetoOnUi && hasUiNoun) continue;
+      if (rule.exclude.some((p) => p.test(clause))) continue;
+      if (rule.patterns.some((p) => p.test(clause))) {
+        found.set(rule.id, { id: rule.id, risk: rule.risk, why: rule.why, instead: rule.instead });
+      }
     }
   }
-  return out;
+  return [...found.values()];
 }

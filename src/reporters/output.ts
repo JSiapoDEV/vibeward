@@ -28,8 +28,15 @@ export interface FinishExtras {
   configPath?: string | null;
 }
 
-/** Bumped whenever the `--stdout` payload changes shape. Agents can rely on it. */
-const SCHEMA_VERSION = 1;
+/**
+ * Bumped whenever the `--stdout` payload changes shape. Agents can rely on it.
+ *
+ * 2 — `fix` and `autofix` removed from every finding. They were the channel that told an
+ * agent what to go and change, and vibeward reports rather than repairs; the remediation a
+ * person needs is in `why`. Unrelated to the `schemaVersion` in `vibeward.json`, which is
+ * the config format and is still 1.
+ */
+const SCHEMA_VERSION = 2;
 
 /**
  * Writes every byte to stdout before returning, then the caller may exit.

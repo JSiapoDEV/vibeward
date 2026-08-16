@@ -12,7 +12,8 @@ import { VERSION } from './core/version.js';
 import { C, log } from './core/terminal.js';
 import { runUrlScan } from './scanners/url.js';
 import { runFolderScan } from './scanners/folder.js';
-import { runGuard } from './scanners/guard.js';
+import { runGuard } from './guard/run.js';
+import { findHost } from './init/capabilities.js';
 import { SUPABASE_AUDIT_SQL } from './checks/supabase.js';
 
 function usage(): void {
@@ -37,16 +38,24 @@ function usage(): void {
     `  vibeward scan <folder> [--supabase export.json] [--sarif f]            white-box code scan`,
   );
   log(
-    `  vibeward init [--scope project|user] [--targets a,b] [--all] [--yes]   install the agent skill`,
+    `  vibeward init [--scope project|user] [--targets a,b] [--moments a,b]   install the skill + guard`,
   );
+  log(
+    `${C.dim}      --targets: ${'claude-code, codex, cursor, copilot, gemini, windsurf, opencode,'}${C.reset}`,
+  );
+  log(`${C.dim}                 claude-md, agents-md, gh-action${C.reset}`);
+  log(`${C.dim}      --moments: prompt, action, content${C.reset}`);
   log(
     `  vibeward supabase-sql                                                  print the read-only audit query`,
   );
   log(
-    `  vibeward guard [--block]                                               hook: gate risky prompts (reads stdin)`,
+    `  vibeward guard [--host h] [--block]                                    hook: gate risk (reads stdin)`,
   );
   log(
-    `${C.dim}      default: warns the agent in-context (exit 0); --block erases the prompt (exit 2)${C.reset}\n`,
+    `${C.dim}      the host and the moment come from the payload; --host only for hosts that send neither${C.reset}`,
+  );
+  log(
+    `${C.dim}      default: warns the agent in-context (exit 0); --block stops a risky prompt instead${C.reset}\n`,
   );
   log(`${C.dim}Example:  vibeward https://client-app.lovable.app --yes${C.reset}`);
 }
@@ -68,16 +77,29 @@ async function main(): Promise<void> {
     process.exit(0);
   }
   if (cmd === 'guard') {
-    // Default is context injection, not blocking: see the note on GuardMode. `--warn` is
-    // kept as an alias so settings.json files written by older versions keep working.
-    await runGuard(argv.includes('--block') ? 'block' : 'context');
+    // Host and moment both come from the payload on stdin, so a settings file needs no
+    // arguments and cannot be wrong about its own event. `--host` exists for the one host
+    // that sends nothing identifying, and `--block` escalates prompt matches for anyone who
+    // wants a hard stop — off by default, because a blocked prompt is a lost paragraph.
+    const flag = argv.indexOf('--host');
+    const named = flag >= 0 ? (argv[flag + 1] ?? '') : '';
+    await runGuard({
+      host: findHost(named)?.id,
+      block: argv.includes('--block'),
+    });
   }
   if (cmd === 'init') {
     // Loaded on demand: the installer carries every template as a string, and a plain
     // scan has no reason to parse any of it.
     const { runInit } = await import('./init/run.js');
     const args = parseArgs(argv.slice(1));
-    await runInit({ scope: args.scope, targets: args.targets, all: args.all, yes: args.yes });
+    await runInit({
+      scope: args.scope,
+      targets: args.targets,
+      moments: args.moments,
+      all: args.all,
+      yes: args.yes,
+    });
   }
   if (cmd === 'scan') {
     const args = parseArgs(argv.slice(1));

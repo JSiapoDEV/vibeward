@@ -36,6 +36,40 @@ give a vibe-coded site away.
 
 ---
 
+## The contract
+
+This is the whole of what vibeward promises, and the reference for settling any question about
+what it should do next.
+
+**It does three things:**
+
+1. **Detects**, deterministically and with no LLM call anywhere — 38 finding rules over a
+   deployed site or a code folder, plus 8 intent rules over natural language in English,
+   Spanish and Portuguese.
+2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
+3. **Warns first**, through editor hooks, at the moments risk enters the system.
+
+**It does not:**
+
+- **Fix anything.** Not security findings, not website ones, not the one-line mechanical ones,
+  and not on request. It does not edit files, open PRs or deploy. Findings carry no `fix` field
+  and no `autofix` field, by design — a clear report is the finished product, not a step toward
+  one. What to change is the owner's decision and the owner's edit.
+- **Call an LLM.** Not to classify, not to rank, not to suppress false positives. A guardrail
+  that can be talked out of its own rules is not a guardrail.
+- **Decide severity at runtime.** It is in the rule table or it does not exist.
+- **Scan without authorization.** `--passive` is the default; the full scan requires the user to
+  state they own the target.
+- **Let security be silenced.** `vibeward.json` can only suppress `kind: "web"` ids.
+- **Prove a site is safe.** It covers a known, finite list. A clean report means those checks
+  passed, nothing more.
+
+What the hooks can actually enforce depends on which editor you run — the guarantees are not the
+same everywhere, and [Install it into your AI tools](#install-it-into-your-ai-tools) says exactly
+where each one degrades.
+
+---
+
 ## Why this exists
 
 The failure is documented, not hypothetical — with the caveats attached, because all three of
@@ -273,41 +307,80 @@ whatever it detects in your repo:
 ```
 ? Where do you want it?
 ❯ ● This project      ~/Developer/my-site
-  ○ My user account   ~/.claude — available in every repo
+  ○ My user account   available in every repo
 
 ? What should I install?
-❯ ◉ Claude Code · skill: audit + fix     .claude/skills/vibeward/SKILL.md
-  ◉ Claude Code · guard hook             .claude/settings.json         merge
-  ◉ Cursor · rule                        .cursor/rules/vibeward.mdc
-  ○ AGENTS.md · universal fallback       AGENTS.md                     merge
-  ○ Windsurf / Devin · rule              .devin/rules/vibeward.md
-  ○ GitHub Action · scan on every push   .github/workflows/vibeward.yml
+❯ ◉ Claude Code             skill + guard (prompt, action, content)
+  ◉ Cursor                  skill + guard (prompt, action, content)
+  ○ OpenAI Codex CLI        skill + guard (prompt, action, content)
+  ○ GitHub Copilot CLI      skill + guard (action, content)
+  ○ Gemini CLI              skill + guard (prompt, action, content)
+  ○ Windsurf / Devin        skill + guard (prompt, action)
+  ○ opencode                skill + guard (prompt, action, content)
+  ◉ CLAUDE.md · always-on rules            merge
+  ○ AGENTS.md · universal fallback         merge
+  ○ GitHub Action · scan on every push
+
+? What should the guard watch?
+❯ ◉ When you send a prompt
+  ◉ When the agent edits a file or runs a command
+  ◉ When the agent reads a page, file or tool result
 ```
 
-Options that the chosen scope cannot take are shown greyed out **with the reason** rather than
-hidden — Cursor keeps user-level rules in its settings UI, not on disk, and a GitHub workflow only
-ever lives inside a repository.
+Each host gets one `SKILL.md` — the format is now shared, so the per-editor rule files
+(`.cursor/rules`, `.devin/rules`) are gone and there is one body of text instead of four.
+
+### The three moments, and where each one actually works
+
+| | you send a prompt | the agent edits or runs | the agent reads |
+|---|---|---|---|
+| **Claude Code** | warns | asks, with the reason | warns |
+| **Codex CLI** | warns | asks, with the reason | warns |
+| **Cursor** | ⚠️ can only block | asks, with the reason | warns |
+| **Copilot CLI** ¹ | ❌ output is discarded | asks, reason only on deny | warns |
+| **Gemini CLI** | warns | ⚠️ deny only, no warning | warns |
+| **Windsurf / Devin** | ⚠️ blocks or nothing | ⚠️ blocks or nothing | ❌ display-only |
+| **opencode** | warns | blocks, with the reason | warns |
+
+¹ **"Copilot" is two products here, and only one of them gets the guard.** Hooks exist in
+Copilot CLI and the Copilot cloud agent — [not in the VS Code extension][copilot-hooks]. The
+SKILL.md does reach VS Code and JetBrains agent mode, so installing the Copilot target from an
+IDE gives you the audit skill and **no guard at all**. `init` says so after it writes.
+
+[copilot-hooks]: https://docs.github.com/en/copilot/concepts/agents/hooks
+
+"Warns" means the note reaches the **model** and nothing is interrupted — a false positive costs
+one ignored paragraph. Where an editor cannot do that, vibeward **stays silent rather than
+blocking**: losing the paragraph you just typed is how a guardrail gets uninstalled, and one that
+is uninstalled protects nobody. `init` prints these limits after it writes, per editor, so you
+know what you actually have. Pass `--block` on the hook command if you want the hard stop anyway.
+
+The **action** row is the one worth reading twice. It is the only moment nobody asked for: the
+agent hits a failing query and reaches for `DISABLE ROW LEVEL SECURITY` on its own. The prompt
+gate never sees it, because there was no prompt.
 
 It previews every file before touching disk, never overwrites a file it did not write, merges
-`settings.json` key by key (your other hooks stay put) and `AGENTS.md` between markers — so
+settings files key by key (your other hooks stay put) and markdown between markers — so
 re-running is how you *update*. It backs up any existing file to `<file>.vibeward.bak` before its
 first change, and works non-interactively for CI and dotfiles:
 
 ```bash
-vibeward init --scope project --targets claude-skill,claude-hook,cursor --yes
+vibeward init --scope project --targets claude-code,cursor --moments prompt,action --yes
 vibeward init --scope user --all --yes
 ```
 
-**Why a skill?** Because the split matters: **the deterministic package detects, the agent fixes.**
-An agent asked to "check if the meta description is missing" hallucinates. A parser answering
-yes/no never does. So vibeward reports, the skill applies the fixes it can, and then **re-runs
-vibeward to verify** — `detect → fix → re-detect`, the same loop as a test suite. Every finding
-carries a `fix` and an `autofix` field (`auto` / `needs-input` / `manual`) that tells the agent
-exactly how far it may go on its own.
+**Why a skill?** Because the split matters: **the deterministic package detects, the agent
+explains.** An agent asked to "check if the meta description is missing" hallucinates. A parser
+answering yes/no never does. So the scanner decides what is true, and the skill's job is to turn
+that into something a human can act on — leading with what it costs, quoting the evidence
+verbatim, and never restating a severity in its own words.
 
-The installed instructions are explicit that **security findings are never auto-fixed**: deleting an
-exposed key from a bundle does not un-leak it, and only the owner decides when it is rotated and
-whether the incident has to be disclosed.
+What the skill explicitly forbids is the agent going on to fix any of it. That is not a
+limitation to be worked around, it is the point: an audit that ends in a pile of unrequested
+diffs replaces the thing you can act on with a thing you now have to review. And on the security
+side it is worse than untidy — deleting an exposed key from a bundle does not un-leak it. The key
+has to be rotated, and only the owner decides when, and whether the incident has to be disclosed.
+Quietly patching it hides an incident from the person accountable for it.
 
 > One gotcha worth knowing: **Claude Code reads `CLAUDE.md`, not `AGENTS.md`.** If you install only
 > the AGENTS.md target, add `@AGENTS.md` as the first line of your `CLAUDE.md` — or just install the
@@ -402,7 +475,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: JSiapoDEV/vibeward@v0.4.0
+      - uses: JSiapoDEV/vibeward@v0.5.0
         with:
           path: '.'
           # supabase: audit.json   # optional: a committed Supabase export

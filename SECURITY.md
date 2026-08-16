@@ -59,15 +59,39 @@ security fixes.** There are no maintenance branches. `npx vibeward@latest` and a
 | 0.3.x | ✅ |
 | < 0.3 | ❌ upgrade |
 
+## What vibeward promises
+
+The security-relevant half of [the contract](README.md#the-contract), restated here because it
+bounds what a report against this project can even be about:
+
+- **It detects and reports. It never fixes.** No finding carries a `fix` or an `autofix`
+  field, and the installed instructions forbid an agent from acting on one. If you find a
+  path by which vibeward edits a user's application code, that is a vulnerability in this
+  project, not a feature working.
+- **It never calls an LLM.** Every rule is deterministic and in the repository. A guardrail
+  that could be argued out of its own rules would not be one.
+- **It reads; it does not write to the systems it scans.** The one exception is `--write-test`,
+  which is opt-in, off by default and documented as a write.
+- **Security findings cannot be silenced by a config file.** `vibeward.json` may only suppress
+  `kind: "web"` ids. A way to make a critical security finding disappear from a report through
+  configuration is a vulnerability — the report is what someone is trusting.
+- **A clean report is not proof of safety.** It means a known, finite list of checks passed.
+
 ## Scope
 
 ### In scope
 
 The things that make vibeward more dangerous than the average CLI:
 
-- **The guard hook.** It runs on **every prompt you type**, in the user's shell, before the
-  agent acts. Anything that turns a prompt into command execution is the highest-severity
-  class in this project. Report it first.
+- **The guard hook.** It runs on **every prompt you type** and, once the action and content
+  moments are installed, on every file the agent writes and every tool result it reads — in
+  the user's shell, before the agent acts. Anything that turns any of that input into command
+  execution is the highest-severity class in this project. Report it first.
+- **The content gate parses hostile input by design.** It scans web pages, README files and
+  MCP results that an attacker may control. A crash, a hang (catastrophic backtracking) or an
+  escape from it is in scope.
+- **`init` writes to a user's real project** and merges into settings files they own. A path
+  by which it destroys or exfiltrates existing content is in scope.
 - **`vibeward init`.** The one command that writes to disk. Path traversal outside the
   chosen scope, clobbering a file it did not author, writing outside the previewed set, a
   malformed `settings.json` merge that breaks your other hooks — all in scope.

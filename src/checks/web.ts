@@ -457,13 +457,7 @@ export function checkWeb(input: {
         evidence: `vibeward.json declares \`intent.aiCrawlers: "blocked"\`, but ${open.length} of ${AI_BOTS.length} watched AI crawlers are still allowed: ${open.join(', ')}.`,
         impact:
           'The content is being read and reused by the crawlers that were left out, which is exactly what the site set out to prevent — and nobody will notice, because the intention was recorded and never verified.',
-        why: 'A partial block is the worst of both worlds: none of the visibility of being open, none of the protection of being closed.',
-        fix: `Add the missing agents to robots.txt (\`public/robots.txt\` in most projects):
-
-${open.map((b) => `User-agent: ${b}\nDisallow: /`).join('\n\n')}
-
-robots.txt is a request, not a wall. Crawlers that ignore it need blocking at the CDN or the server.`,
-        autofix: 'auto',
+        why: `A partial block is the worst of both worlds: none of the visibility of being open, none of the protection of being closed. Completing it means a \`User-agent\` / \`Disallow: /\` pair in \`public/robots.txt\` for each agent still allowed. Worth knowing before relying on it: robots.txt is a request, not a wall — crawlers that choose to ignore it have to be stopped at the CDN or the server.`,
         references: ['https://www.rfc-editor.org/rfc/rfc9309'],
         meta: { count: open.length },
       });
@@ -482,21 +476,16 @@ robots.txt is a request, not a wall. Crawlers that ignore it need blocking at th
       evidence: `robots.txt carries an effective \`Disallow: /\` under ${where}, which shuts out ${blockedBots.length} AI crawler${blockedBots.length === 1 ? '' : 's'}: ${blockedBots.join(', ')}.`,
       impact:
         'The site cannot be read by the assistants people now ask instead of Google, so it can never be cited, summarised or recommended in an AI answer. That referral channel is closed at the door.',
-      why: 'Blocking these agents removes the site from ChatGPT, Claude, Perplexity and Google AI answers. It is one line in a text file, and it is usually there by copy-paste, not by decision.',
-      // Surgical on purpose. This fix is `autofix: 'auto'`, so an agent applies it unattended:
-      // handing it a whole replacement robots.txt would delete the Disallow rules the owner
-      // does want (/admin, /checkout, staging) as a side effect of an SEO fix.
-      fix: `In robots.txt (\`public/robots.txt\` in most projects), delete ONLY the \`Disallow: /\` line inside ${
-        blockingAgents.length === 1 ? 'this group' : 'these groups'
-      } and leave every other line exactly as it is:
-
-${blockingAgents.map((a) => `User-agent: ${a}\n  Disallow: /        <- delete this line only`).join('\n\n')}
-${
-  viaWildcard
-    ? `\nIf the intent was to keep some paths private, replace it with the specific ones (\`Disallow: /admin\`), never with a bare \`/\`.`
-    : `\nAn empty \`Disallow:\` also works and is equivalent to allowing everything.`
-}`,
-      autofix: 'auto',
+      // Deliberately precise about scope. Whoever acts on this must delete one line, not the
+      // file: replacing robots.txt wholesale also deletes the Disallow rules the owner does
+      // want (/admin, /checkout, staging) as a silent side effect of an SEO change.
+      why: `Blocking these agents removes the site from ChatGPT, Claude, Perplexity and Google AI answers. It is one line in a text file, and it is usually there by copy-paste, not by decision. It is undone by deleting only the \`Disallow: /\` line inside ${
+        blockingAgents.length === 1 ? 'that group' : 'those groups'
+      } — every other line in the file is doing a job and must stay.${
+        viaWildcard
+          ? ' If some paths really are meant to be private, name them (`Disallow: /admin`) instead of using a bare `/`.'
+          : ' An empty `Disallow:` is equivalent to allowing everything.'
+      }`,
       references: [
         'https://platform.openai.com/docs/bots',
         'https://www.rfc-editor.org/rfc/rfc9309',
@@ -516,18 +505,7 @@ ${
       evidence: `The home page returns ${home.bodyTextLength} characters of visible text before JavaScript runs (${ofPages(emptyPages.length, total)} below ${EMPTY_HTML_CHARS} characters).`,
       impact:
         'To anything that does not run JavaScript the site is a blank page: no headline, no copy, nothing to index or quote. Most AI crawlers never execute scripts, so the site simply does not exist for them.',
-      why: 'A client-rendered shell hands crawlers an empty <div>. Google renders eventually and inconsistently; GPTBot, ClaudeBot and PerplexityBot do not render at all.',
-      fix: `Ship real HTML instead of an empty shell.
-
-Cheapest fix, no framework change — put the real headline and first paragraph inside the mount node in \`index.html\` so it is in the source before any script runs:
-
-<div id="root">
-  <h1>Acme — bookkeeping for freelancers</h1>
-  <p>One sentence saying what you do and who it is for.</p>
-</div>
-
-Proper fix — build the pages with a renderer that emits HTML: Astro, Next.js (\`app/\` server components) or Vite SSG.`,
-      autofix: 'manual',
+      why: 'A client-rendered shell hands crawlers an empty <div>. Google renders eventually and inconsistently; GPTBot, ClaudeBot and PerplexityBot do not render at all. Closing it is an architecture decision, not a text edit: either the real headline and first paragraph live inside the mount node in `index.html` so they are in the source before any script runs, or the pages are built by a renderer that emits HTML (Astro, Next.js server components, Vite SSG).',
       meta: { pages: urlsOf(emptyPages), count: emptyPages.length },
     });
   }
@@ -539,23 +517,18 @@ Proper fix — build the pages with a renderer that emits HTML: Astro, Next.js (
       label: 'Assets referenced by the site return an error',
       severity: 'high',
       kind: 'web',
-      evidence: `${brokenAssets.length} referenced file${brokenAssets.length === 1 ? '' : 's'} answer with 4xx/5xx, e.g. ${listed
-        .slice(0, 3)
-        .map((a) => `${a.url} (${a.status})`)
-        .join(', ')}.`,
+      // The full list is evidence, not remediation: it is what proves the finding, and it is
+      // the part a reader cannot reconstruct on their own.
+      evidence: `${brokenAssets.length} referenced ${brokenAssets.length === 1 ? 'file answers' : 'files answer'} with 4xx/5xx — ${listed
+        .map((a) => `${a.url} → ${a.status} (referenced from ${a.from})`)
+        .join(' · ')}${
+        brokenAssets.length > listed.length
+          ? ` · …and ${brokenAssets.length - listed.length} more`
+          : ''
+      }`,
       impact:
         'Visitors see missing images, unstyled sections or a feature that never loads — the fastest way to look abandoned and lose the sale on the first screen.',
-      why: 'The page points at files that are not deployed: a path that only exists locally, a renamed asset, or an image the build never copied.',
-      fix: `Fix the path or delete the tag for each of these:
-
-${listed.map((a) => `- ${a.url} -> ${a.status} (referenced from ${a.from})`).join('\n')}${
-        brokenAssets.length > listed.length
-          ? `\n- …and ${brokenAssets.length - listed.length} more`
-          : ''
-      }
-
-Assets served from the site root must live in \`public/\` (Vite, Next.js, Astro) or \`static/\` (SvelteKit) so the build copies them.`,
-      autofix: 'auto',
+      why: 'The page points at files that are not deployed: a path that only exists locally, a renamed asset, or an image the build never copied. Assets served from the site root have to live in `public/` (Vite, Next.js, Astro) or `static/` (SvelteKit) for the build to copy them — otherwise the reference has to go.',
       meta: { count: brokenAssets.length },
     });
   }
@@ -568,20 +541,18 @@ Assets served from the site root must live in \`public/\` (Vite, Next.js, Astro)
       severity: 'high',
       kind: 'web',
       source: home?.url,
-      evidence: `${consoleErrors.length} console error${consoleErrors.length === 1 ? '' : 's'} on load: ${listed
-        .map((e) => `[${e.type}] ${e.text.slice(0, 120)}`)
-        .join(' | ')}`,
-      impact:
-        'Something on the page is already broken for every visitor — a form that never submits, a section that never appears. Whatever the error interrupts, the user never completes.',
-      why: 'An uncaught exception stops the rest of that script. Errors on first load are not cosmetic: they usually mean a feature is dead.',
-      fix: `Open the page with DevTools on the Console tab, reproduce, and fix the throwing code:
-
-${listed.map((e) => `- [${e.type}] ${e.text.slice(0, 300)}`).join('\n')}${
+      // The error text is the evidence and the only lead a reader has, so it is quoted at the
+      // length that keeps a stack-trace line readable rather than truncated to a teaser.
+      evidence: `${consoleErrors.length} console error${consoleErrors.length === 1 ? '' : 's'} on load — ${listed
+        .map((e) => `[${e.type}] ${e.text.slice(0, 300)}`)
+        .join(' · ')}${
         consoleErrors.length > listed.length
-          ? `\n- …and ${consoleErrors.length - listed.length} more`
+          ? ` · …and ${consoleErrors.length - listed.length} more`
           : ''
       }`,
-      autofix: 'manual',
+      impact:
+        'Something on the page is already broken for every visitor — a form that never submits, a section that never appears. Whatever the error interrupts, the user never completes.',
+      why: 'An uncaught exception stops the rest of that script. Errors on first load are not cosmetic: they usually mean a feature is dead. Reproducing them with DevTools open on the Console tab is what turns the message above into the line of code that threw.',
       meta: { count: consoleErrors.length },
     });
   }
@@ -596,16 +567,7 @@ ${listed.map((e) => `- [${e.type}] ${e.text.slice(0, 300)}`).join('\n')}${
       evidence: `All ${total} crawled pages send the same title: "${firstTitle}".`,
       impact:
         'Every page competes for the same search result and none of them wins. The title is the blue line people click in Google and the label of every shared tab and bookmark.',
-      why: 'Search engines treat identical titles as duplicate pages and pick one, dropping the rest. A one-page-app router that never updates the title is the usual cause.',
-      fix: `Give every page its own <title> — 50-60 characters, the page subject first, the brand last:
-
-<!-- /pricing -->
-<title>Pricing — Acme</title>
-
-React SPA without a meta framework, set it per route:
-
-useEffect(() => { document.title = 'Pricing — Acme'; }, []);`,
-      autofix: 'needs-input',
+      why: 'Search engines treat identical titles as duplicate pages and pick one, dropping the rest. A one-page-app router that never updates the title is the usual cause. Each page needs its own `<title>` of roughly 50-60 characters, page subject first and brand last ("Pricing — Acme"); in a React SPA with no meta framework that means setting `document.title` per route.',
       meta: { pages: urlsOf(pages), count: total },
     });
   }
@@ -621,11 +583,7 @@ useEffect(() => { document.title = 'Pricing — Acme'; }, []);`,
       evidence: `${ofPages(noTitle.length, total)} have no <title> tag, including the home page.`,
       impact:
         'Google prints the URL or an invented phrase as the search result headline, and the browser tab reads as the bare domain. It is the single most visible piece of text the site owns.',
-      why: 'The <title> is the headline of every search result, every shared link and every bookmark. Without it there is nothing to click.',
-      fix: `Add a <title> to the <head> of every page:
-
-<title>Acme — bookkeeping for freelancers</title>`,
-      autofix: 'needs-input',
+      why: 'The <title> is the headline of every search result, every shared link and every bookmark. Without it there is nothing to click. Every page needs one in its `<head>`, naming what the business does rather than repeating the brand alone.',
       meta: { pages: urlsOf(noTitle), count: noTitle.length },
     });
   }
@@ -640,11 +598,7 @@ useEffect(() => { document.title = 'Pricing — Acme'; }, []);`,
       evidence: `${ofPages(noDescription.length, total)} have no <meta name="description">.`,
       impact:
         'Google fills the two lines under the link with whatever text it scrapes off the page, so the pitch a visitor reads before deciding to click is written by an algorithm instead of by the owner.',
-      why: 'The description is the ad copy of the search result. It does not change ranking, it changes the click-through rate.',
-      fix: `Add one description per page, 150-160 characters, written for a human deciding whether to click:
-
-<meta name="description" content="Acme turns a folder of receipts into a monthly report in ten minutes. Built for freelancers who file their own taxes." />`,
-      autofix: 'needs-input',
+      why: 'The description is the ad copy of the search result. It does not change ranking, it changes the click-through rate. One per page, 150-160 characters, written for a human deciding whether to click — a generic one is worse than none, because it looks written and so nobody ever writes the real one.',
       meta: { pages: urlsOf(noDescription), count: noDescription.length },
     });
   }
@@ -659,16 +613,7 @@ useEffect(() => { document.title = 'Pricing — Acme'; }, []);`,
       evidence: `${ofPages(noOg.length, total)} are missing og:title or og:image.`,
       impact:
         'Shared on WhatsApp, LinkedIn, Slack or X the link renders as a naked URL with no image and no title, which people scroll past. Every share the site gets is wasted.',
-      why: 'Open Graph tags are what social platforms and chat apps read to build the preview card. Without them there is no card.',
-      fix: `Add the block to every page's <head> (og:image is a 1200x630 PNG):
-
-<meta property="og:title" content="Acme — bookkeeping for freelancers" />
-<meta property="og:description" content="Receipts in, monthly report out." />
-<meta property="og:image" content="${origin}/og.png" />
-<meta property="og:url" content="${origin}/" />
-<meta property="og:type" content="website" />
-<meta name="twitter:card" content="summary_large_image" />`,
-      autofix: 'needs-input',
+      why: "Open Graph tags are what social platforms and chat apps read to build the preview card. Without them there is no card. A complete set in each page's `<head>` is og:title, og:description, og:image, og:url and og:type, plus `twitter:card` set to `summary_large_image` — and og:image has to be a real 1200x630 image, since a missing one renders as a blank box rather than no card at all.",
       references: ['https://ogp.me/'],
       meta: { pages: urlsOf(noOg), count: noOg.length },
     });
@@ -684,11 +629,7 @@ useEffect(() => { document.title = 'Pricing — Acme'; }, []);`,
       evidence: `${ofPages(noCanonical.length, total)} have no <link rel="canonical">.`,
       impact:
         'The same page reachable at www and non-www, with and without a trailing slash, or with a campaign parameter, is counted as several competing pages, splitting whatever authority the site has earned.',
-      why: 'The canonical tag names the one real address of a page so duplicates consolidate into it instead of competing with it.',
-      fix: `Add one canonical per page, pointing at that page's own absolute URL:
-
-<link rel="canonical" href="${origin}/pricing" />`,
-      autofix: 'auto',
+      why: `The canonical tag names the one real address of a page so duplicates consolidate into it instead of competing with it. Each page needs its own \`<link rel="canonical">\` pointing at its own absolute URL (\`${origin}/pricing\` on the pricing page) — pointing every page at the home page is the common mistake, and it tells search engines the rest of the site does not exist.`,
       references: [
         'https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls',
       ],
@@ -706,21 +647,7 @@ useEffect(() => { document.title = 'Pricing — Acme'; }, []);`,
       evidence: `${ofPages(noJsonLd.length, total)} contain no <script type="application/ld+json"> block.`,
       impact:
         'Search engines and assistants have to guess what the business is, what it sells and where it is. Rich results (ratings, prices, FAQ, opening hours) are not available to a site that never declares them.',
-      why: 'Structured data is the machine-readable version of the page. It is how an assistant answers "who are they and what do they do" with facts instead of guesses.',
-      fix: `Add one JSON-LD block to the home page <head> and adjust the values:
-
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "Organization",
-  "name": "Acme",
-  "url": "${origin}",
-  "logo": "${origin}/logo.png",
-  "description": "Bookkeeping for freelancers.",
-  "sameAs": ["https://www.linkedin.com/company/acme"]
-}
-</script>`,
-      autofix: 'needs-input',
+      why: 'Structured data is the machine-readable version of the page. It is how an assistant answers "who are they and what do they do" with facts instead of guesses. The minimum is one `application/ld+json` block in the home page `<head>` declaring an `Organization` with the real name, url, logo, description and `sameAs` profile links — the values have to be true, because this is the copy an assistant repeats verbatim.',
       references: ['https://schema.org/Organization'],
       meta: { pages: urlsOf(noJsonLd), count: noJsonLd.length },
     });
@@ -744,16 +671,7 @@ useEffect(() => { document.title = 'Pricing — Acme'; }, []);`,
       evidence: `${parts.join('; ')}.`,
       impact:
         'The one line that tells a search engine, an assistant and a screen reader what the page is about is missing or repeated, so the page is filed under the wrong subject or under none.',
-      why: 'Exactly one <h1> per page, carrying the subject of that page. Extra ones are usually styling choices, not headings.',
-      fix: `One <h1> per page, containing the subject of that page:
-
-<h1>Pricing</h1>
-
-Demote the extra <h1> tags to <h2> and keep the styling with a class.
-
-Pages with none: ${noH1.length > 0 ? urlsOf(noH1).join(', ') : '(none)'}
-Pages with several: ${manyH1.length > 0 ? manyH1.map((p) => `${p.url} (${p.h1Count})`).join(', ') : '(none)'}`,
-      autofix: 'needs-input',
+      why: 'Exactly one <h1> per page, carrying the subject of that page. Extra ones are usually styling choices, not headings — they get demoted to <h2> with the look kept in a class, rather than deleted.',
       meta: { pages: [...urlsOf(noH1), ...urlsOf(manyH1)], count: noH1.length + manyH1.length },
     });
   }
@@ -768,18 +686,7 @@ Pages with several: ${manyH1.length > 0 ? manyH1.map((p) => `${p.url} (${p.h1Cou
       evidence: `${origin}/sitemap.xml is not served.`,
       impact:
         'Pages that are not linked from the home page can go unnoticed for weeks or never get indexed at all, and every update takes longer to show up in search.',
-      why: 'A sitemap is the list of pages the owner wants indexed. Without it crawlers only find what they happen to stumble on.',
-      fix: `Create \`public/sitemap.xml\` (\`static/sitemap.xml\` on SvelteKit) with the pages found while crawling:
-
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${(total > 0 ? urlsOf(pages) : [`${origin}/`]).map((u) => `  <url><loc>${u}</loc></url>`).join('\n')}
-</urlset>
-
-Then point robots.txt at it:
-
-Sitemap: ${origin}/sitemap.xml`,
-      autofix: 'auto',
+      why: `A sitemap is the list of pages the owner wants indexed. Without it crawlers only find what they happen to stumble on. It is a \`urlset\` of \`<loc>\` entries at \`public/sitemap.xml\` (\`static/sitemap.xml\` on SvelteKit), with a \`Sitemap: ${origin}/sitemap.xml\` line in robots.txt pointing at it${total > 0 ? ` — this scan reached ${total} page${total === 1 ? '' : 's'}, listed under "Pages scanned"` : ''}.`,
       references: ['https://www.sitemaps.org/protocol.html'],
     });
   }
@@ -794,17 +701,7 @@ Sitemap: ${origin}/sitemap.xml`,
       evidence: `${origin}/llms.txt is not served.`,
       impact:
         'When an assistant is asked about this business it has to reconstruct the offer from whatever markup it can parse. A short curated file is the difference between being described accurately and being described wrong.',
-      why: 'llms.txt is the plain-text summary an AI reads first: what the site is, who it is for, and which pages matter.',
-      fix: `Create \`public/llms.txt\` and replace the placeholders with the real offer:
-
-# Acme
-> One sentence on what the site offers and who it is for.
-
-Acme does X for Y. Based in Z. Contact: hello@example.com
-
-## Pages
-${(total > 0 ? pages : []).map((p) => `- [${p.title ?? 'Page'}](${p.url}): what this page covers`).join('\n') || `- [Home](${origin}/): what this page covers`}`,
-      autofix: 'needs-input',
+      why: 'llms.txt is the plain-text summary an AI reads first: what the site is, who it is for, and which pages matter. It lives at `public/llms.txt` — an H1 with the name, a blockquote with one sentence on the offer and the audience, and a `## Pages` list of the pages worth reading with a line each. It only works if it says what the business actually sells; a placeholder version is worse than none, because it reads as authoritative.',
       references: ['https://llmstxt.org/'],
     });
   }
@@ -819,11 +716,7 @@ ${(total > 0 ? pages : []).map((p) => `- [${p.title ?? 'Page'}](${p.url}): what 
       evidence: `${ofPages(noLang.length, total)} have no lang attribute on <html>.`,
       impact:
         'Browsers offer to translate a page that is already in the language of the visitor, screen readers pick the wrong voice, and search engines can serve the site to the wrong country.',
-      why: 'One attribute tells every client what language the content is written in. Templates ship with it empty or copied from the starter.',
-      fix: `Set the language the content is actually written in:
-
-<html lang="en">`,
-      autofix: 'auto',
+      why: 'One attribute — `lang` on `<html>` — tells every client what language the content is written in. Templates ship with it empty or copied from the starter, so it has to be set to the language the copy is actually in, not the one the template came with.',
       meta: { pages: urlsOf(noLang), count: noLang.length },
     });
   }
@@ -840,13 +733,7 @@ ${(total > 0 ? pages : []).map((p) => `- [${p.title ?? 'Page'}](${p.url}): what 
       evidence: `${imgWithoutAlt} of ${imgTotal} images have no alt attribute, across ${ofPages(affected.length, total)}.`,
       impact:
         'Blind visitors hear "image" instead of the product, image search never returns these pictures, and in several jurisdictions it is an accessibility obligation rather than a nicety.',
-      why: 'Alt text is what an image says to anyone or anything that cannot see it: screen readers, image search, and any crawler indexing the page.',
-      fix: `Describe what the image shows, in the page's language:
-
-<img src="/team.jpg" alt="The Acme team in their Lima office" />
-
-Use \`alt=""\` (empty, not missing) only for decoration such as background shapes or icons next to text that already says the same thing.`,
-      autofix: 'needs-input',
+      why: 'Alt text is what an image says to anyone or anything that cannot see it: screen readers, image search, and any crawler indexing the page. It has to describe what the picture actually shows, in the page\'s language — which means looking at each image, not generating text from the filename. Purely decorative images take an empty `alt=""`, which is different from having none.',
       meta: { pages: urlsOf(affected), count: imgWithoutAlt },
     });
   }
@@ -865,27 +752,7 @@ Use \`alt=""\` (empty, not missing) only for decoration such as background shape
           : `The 404 response body is the same page as the home page.`,
       impact:
         'Search engines index infinite non-existent URLs as copies of the home page, and a visitor who mistypes a link lands on something that looks fine but is not the page they wanted.',
-      why: 'A single-page app that serves index.html for every path never tells anyone that a URL is wrong. The status code is the signal, not the design.',
-      fix: `Add a 404 page and let unknown paths answer 404.
-
-Static host (Netlify, Cloudflare Pages, GitHub Pages, Firebase Hosting) — create \`public/404.html\`:
-
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Page not found</title>
-    <meta name="robots" content="noindex" />
-  </head>
-  <body>
-    <h1>Page not found</h1>
-    <p><a href="/">Back to the home page</a></p>
-  </body>
-</html>
-
-Next.js — create \`app/not-found.tsx\`.
-React SPA — add a catch-all route: <Route path="*" element={<NotFound />} />`,
-      autofix: 'auto',
+      why: 'A single-page app that serves index.html for every path never tells anyone that a URL is wrong. The status code is the signal, not the design — a page that says "not found" while answering 200 does not count. Static hosts read `public/404.html`, Next.js uses `app/not-found.tsx`, and a React SPA needs a catch-all route.',
     });
   }
 
@@ -899,12 +766,7 @@ React SPA — add a catch-all route: <Route path="*" element={<NotFound />} />`,
       evidence: 'No favicon is served and no <link rel="icon"> is declared on any crawled page.',
       impact:
         'The tab, the bookmark and the phone home screen show a blank sheet of paper. It is small, it is free to fix, and it is the difference between a business and a weekend demo.',
-      why: 'The favicon is the only branding a site gets in a row of thirty open tabs.',
-      fix: `Add \`public/favicon.svg\` (and a 180x180 \`public/apple-touch-icon.png\`), then reference them in <head>:
-
-<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-<link rel="apple-touch-icon" href="/apple-touch-icon.png" />`,
-      autofix: 'needs-input',
+      why: 'The favicon is the only branding a site gets in a row of thirty open tabs. It needs a `public/favicon.svg` plus a 180x180 `public/apple-touch-icon.png` for phone home screens, both referenced with `<link rel="icon">` and `<link rel="apple-touch-icon">` in the `<head>`.',
     });
   }
 
@@ -917,16 +779,7 @@ React SPA — add a catch-all route: <Route path="*" element={<NotFound />} />`,
       evidence: `${formatBytes(jsBytes)} of uncompressed JavaScript is downloaded to render the page (threshold: 1.0 MB).`,
       impact:
         'On a mid-range phone over mobile data the page stays blank for seconds, and a large share of visitors leave before it paints — they never see the offer at all.',
-      why: 'Everything in the entry bundle blocks the first render, including code for routes the visitor may never open.',
-      fix: `Find what is heavy, then split it:
-
-npx vite-bundle-visualizer                       # Vite
-npx source-map-explorer 'build/static/js/*.js'   # Create React App
-
-Lazy-load anything not needed for the first paint:
-
-const Chart = React.lazy(() => import('./Chart'));`,
-      autofix: 'manual',
+      why: 'Everything in the entry bundle blocks the first render, including code for routes the visitor may never open. Which dependency is responsible is a measurement, not a guess — `vite-bundle-visualizer` or `source-map-explorer` name it — and the usual answer is lazy-loading whatever is not needed for the first paint.',
       meta: { count: jsBytes },
     });
   }

@@ -1,5 +1,5 @@
 import { isWeb } from '../core/types.js';
-import type { AutofixKind, Finding, Severity, SuppressedFinding } from '../core/types.js';
+import type { Finding, Severity, SuppressedFinding } from '../core/types.js';
 import type { RlsResult } from '../checks/supabase.js';
 import type { StackFingerprint } from '../checks/web.js';
 import { WEB_CHECKS } from '../checks/web.js';
@@ -19,12 +19,6 @@ const WEB_SEV_LABEL: Record<Severity, string> = {
   high: '🔴 High impact',
   medium: '🟡 Medium impact',
   low: '⚪ Low impact',
-};
-
-const FIXABLE_BY: Record<AutofixKind, string> = {
-  auto: 'agent, unattended',
-  'needs-input': 'agent + your input',
-  manual: 'human decision',
 };
 
 export type SeverityCounts = Record<Severity, number>;
@@ -113,11 +107,13 @@ function webSection(
     md += ` **${suppressed.length} suppressed by \`${configName(configPath)}\`** — listed below.`;
   }
   md += `\n\n`;
-  md += `| Check | Status | Impact | Fixable by |\n|---|---|---|---|\n`;
+  // No "Fixable by" column: it existed to tell an agent how far it could go on its own, and
+  // vibeward no longer has an opinion on that because it no longer fixes anything.
+  md += `| Check | Status | Impact | Note |\n|---|---|---|---|\n`;
   for (const c of WEB_CHECKS) {
     const reason = skipReason(c.id);
     if (reason) {
-      md += `| ${c.label} | ⚪ not applicable | ${reason} | — |\n`;
+      md += `| ${c.label} | ⚪ not applicable | — | ${reason} |\n`;
       continue;
     }
     const hidden = silenced.get(c.id);
@@ -130,8 +126,7 @@ function webSection(
       md += `| ${c.label} | ✅ ok | — | — |\n`;
       continue;
     }
-    const by = f.autofix ? FIXABLE_BY[f.autofix] : '—';
-    md += `| ${c.label} | ❌ | ${WEB_SEV_LABEL[f.severity]} | ${by} |\n`;
+    md += `| ${c.label} | ❌ | ${WEB_SEV_LABEL[f.severity]} | — |\n`;
   }
   md += `\n`;
 
@@ -154,10 +149,6 @@ function webSection(
       if (f.evidence) md += `**Evidence:** ${f.evidence}\n\n`;
       if (f.impact) md += `**Impact:** ${f.impact}\n\n`;
       md += `**Why it matters:** ${f.why}\n\n`;
-      if (f.fix) {
-        md += `**Fix** (${f.autofix ? FIXABLE_BY[f.autofix] : 'manual'}):\n\n`;
-        md += f.fix.includes('\n') ? `\`\`\`\n${f.fix}\n\`\`\`\n\n` : `\`${f.fix}\`\n\n`;
-      }
       if (f.meta?.pages?.length) {
         const shown = f.meta.pages.slice(0, 8);
         md += `**Pages:** ${shown.map((p) => `\`${p}\``).join(', ')}`;
@@ -267,8 +258,13 @@ export function buildReport({
         md += `> 🔴 **${rls.writable.length} table(s) also accept unauthenticated writes** — `;
         md += `anyone can tamper with the data, not just read it.\n\n`;
       }
-      md += `**How to fix:** enable RLS on every table (\`ALTER TABLE x ENABLE ROW LEVEL SECURITY;\`) `;
-      md += `and write policies that filter by \`auth.uid()\`, not \`true\`.\n\n`;
+      // Addressed to the owner, not to an agent. This is an exposure that has already
+      // happened, so closing the hole is only half of it — whatever was reachable was
+      // reachable to everyone, for as long as it has been live.
+      md += `**What this takes to close:** enable RLS on every table `;
+      md += `(\`ALTER TABLE x ENABLE ROW LEVEL SECURITY;\`) and write policies that filter by `;
+      md += `\`auth.uid()\`, not \`true\`. Treat the data as already read: rotate any credential `;
+      md += `that was reachable, and decide whether this needs disclosing.\n\n`;
     } else if (rls.probed) {
       md += `${how} were probed with the public key. `;
       md += `None returned data: **RLS appears active** on the probed tables. `;

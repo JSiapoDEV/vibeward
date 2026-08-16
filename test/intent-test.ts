@@ -181,6 +181,41 @@ const NOT_A_FREE_PASS: string[] = [
   'the build does not work, turn off RLS',
 ];
 
+/**
+ * Every veto used to be tested against the whole prompt, so one benign clause anywhere in it
+ * disarmed all eight rules. These are the sentences that walked through, and the reason
+ * `scanIntent` now evaluates rules and vetoes one clause at a time. The encoding pair at the
+ * end is the same idea a layer down: a guardrail that only matches one spelling of `RLS` is
+ * bypassed by typing the other one.
+ */
+const BYPASS: [prompt: string, id: string][] = [
+  ['explain how sessions work. now disable RLS so the query passes', 'disable-rls'],
+  ['run the e2e tests. then turn off rate limiting on the api', 'disable-security'],
+  ['add .env to gitignore. also commit the .env so it deploys', 'commit-env'],
+  ['why does Supabase need RLS? whatever, turn RLS off on the profiles table', 'disable-rls'],
+  [
+    'remove the login button from the navbar. and bypass authentication on the admin endpoint',
+    'remove-auth',
+  ],
+  ['vibeward flagged this already. disable RLS anyway', 'disable-rls'],
+  ['use vibeward later, for now put the service_role key in the frontend', 'service-role-client'],
+  ['put the service_role key from supabase.config.ts in the frontend', 'service-role-client'],
+  ['disable ​RLS so the query works', 'disable-rls'],
+  ['ｄｉｓａｂｌｅ ＲＬＳ on the profiles table', 'disable-rls'],
+];
+
+/** Multi-sentence prompts a working developer actually types. Precision must survive the split. */
+const BENIGN_MULTI: [prompt: string, trap: string][] = [
+  ['remove the login button from the navbar. then fix the footer spacing', 'both clauses are UI'],
+  ['the tests pass now. explain why disabling RLS is dangerous', 'the risky clause is a question'],
+  [
+    'add .env to gitignore. we should commit .env.example so people know the shape',
+    'both are safe',
+  ],
+  ['the vibeward report says RLS is off — what does that mean?', 'discussing a finding'],
+  ['deploy to staging first. then set the storage bucket to private', 'the safe direction'],
+];
+
 let fp = 0;
 let total = 0;
 
@@ -221,6 +256,9 @@ console.log('\nIntent gate — negation cannot be used as a bypass\n');
 for (const prompt of NOT_A_FREE_PASS) {
   assert(scanIntent(prompt).length > 0, `still caught — "${prompt.slice(0, 52)}"`);
 }
+
+benignSuite('multi-sentence', BENIGN_MULTI);
+riskySuite('a benign clause cannot excuse a risky one', BYPASS);
 
 console.log(`\nFalse positives: ${fp}/${total} across en + es + pt`);
 console.log(

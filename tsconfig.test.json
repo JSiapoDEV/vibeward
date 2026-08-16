@@ -1,0 +1,16 @@
+// Type-checks the tests, which the build config cannot: `rootDir: "src"` and
+// `include: ["src"]` exist so `tsc` emits exactly the published tree, and the cost of that is
+// that nothing under test/ was ever checked. A rename in src/ could therefore break a test
+// import and stay invisible until the suite actually ran — which is how `claudeSkill` →
+// `skillFile` shipped a broken contract-test past a green `npm run typecheck`.
+//
+// No emit here, no rootDir: this config exists only to be right about types.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false
+  },
+  "include": ["src", "test"]
+}

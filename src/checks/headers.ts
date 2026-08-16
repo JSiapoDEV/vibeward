@@ -34,7 +34,7 @@ const EXPECTED: ExpectedHeader[] = [
     cwe: 'CWE-319',
     exploit:
       'An on-path attacker can force a victim onto plain HTTP on the first request and intercept credentials or session cookies.',
-    why: 'HTTPS is not pinned for future visits.',
+    why: 'HTTPS is not pinned for future visits, so the browser is willing to try plain HTTP again next time. The header tells it never to, for a stated period — `Strict-Transport-Security: max-age=63072000; includeSubDomains` is the usual setting, and it belongs on the CDN or the server, not in the page.',
     references: [
       'https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Strict-Transport-Security',
     ],
@@ -58,7 +58,7 @@ const EXPECTED: ExpectedHeader[] = [
     cwe: 'CWE-430',
     exploit:
       'The browser may MIME-sniff a response as a different type than declared, enabling some script-execution attacks.',
-    why: '"nosniff" is not set.',
+    why: 'Without `X-Content-Type-Options: nosniff` the browser is allowed to second-guess the declared Content-Type and treat a file as whatever its bytes look like. An uploaded image that happens to parse as script is the classic case. It is one header with one value and no trade-offs.',
     references: [
       'https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options',
     ],

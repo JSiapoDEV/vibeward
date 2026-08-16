@@ -10,9 +10,6 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low';
  */
 export type FindingKind = 'security' | 'web';
 
-/** Who can apply `fix`: an agent alone, an agent given business context, or a human. */
-export type AutofixKind = 'auto' | 'needs-input' | 'manual';
-
 export interface Finding {
   id: string;
   label: string;
@@ -31,12 +28,16 @@ export interface Finding {
   exploit?: string;
   /** Quantified consequence (rows, data, money at risk). */
   impact?: string;
-  /** Why it matters, in business language. */
+  /**
+   * Why it matters, in business language, and what a correct version looks like.
+   *
+   * There is deliberately no `fix` snippet and no `autofix` field. vibeward detects and
+   * reports; it does not hand an agent something shaped like a work order. Those two fields
+   * were an instruction channel to an agent, and every one of them was an invitation to
+   * start editing a site nobody asked it to edit. What a reader needs — what is missing and
+   * what a correct one looks like — belongs here, in prose a human can act on.
+   */
   why: string;
-  /** The concrete remediation — a snippet, a file to add, a command to run. */
-  fix?: string;
-  /** Whether an agent can apply `fix` unattended. Read by the `vibeward init` skill. */
-  autofix?: AutofixKind;
   /** CVE / CWE / vendor-docs URLs for the client's AI and reviewers. */
   references?: string[];
   /** Structured context (the affected table, the pages involved, a count). */

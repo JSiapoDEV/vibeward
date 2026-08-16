@@ -31,6 +31,8 @@ export interface Args {
   scope?: 'project' | 'user';
   /** `init` only: which targets to write, bypassing the interactive picker. */
   targets?: string[];
+  /** `init` only: which moments the guard should watch (`prompt`, `action`, `content`). */
+  moments?: string[];
   /** `init` only: every target available for the chosen scope. */
   all?: boolean;
 }
@@ -57,11 +59,13 @@ export function parseArgs(argv: string[]): Args {
     else if (a === '--scope') {
       const v = argv[++i];
       if (v === 'project' || v === 'user') args.scope = v;
-    } else if (a === '--targets') {
-      args.targets = (argv[++i] ?? '')
+    } else if (a === '--targets' || a === '--moments') {
+      const list = (argv[++i] ?? '')
         .split(',')
         .map((t) => t.trim())
         .filter(Boolean);
+      if (a === '--targets') args.targets = list;
+      else args.moments = list;
     } else if (!a.startsWith('--') && !args.target) args.target = a;
   }
   // Nobody can answer a prompt when stdout is being piped into a parser.

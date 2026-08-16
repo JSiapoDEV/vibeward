@@ -1,44 +1,62 @@
-// One entry per place an agent reads its instructions from. A target knows its paths, how
-// it has to be written, and how to guess whether this repo (or this machine) already uses
-// that tool. It knows nothing about prompting or disk I/O — that is `run.ts`.
+// One entry per place an agent reads its instructions from. A target knows which files it
+// owns, how each has to be written, and how to guess whether this repo (or this machine)
+// already uses that tool. It knows nothing about prompting or disk I/O — that is `run.ts`.
 //
-// Paths were verified against live documentation before shipping. A file written to a path
-// a tool no longer reads is worse than no file at all: the user believes it is installed.
+// Every path comes from capabilities.ts, which is the verified table. Nothing here invents a
+// location: a file written where a tool no longer reads is worse than no file at all, because
+// the user believes it is installed.
+//
+// A target may own more than one file — a host normally means "the skill and the hook
+// manifest" — so the unit the picker offers is the tool, not the file. Eleven rows a person
+// can reason about beat seventeen they scroll past.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Moment } from '../guard/verdict.js';
+import { HOSTS, explain, type Host } from './capabilities.js';
+import { hookFile, isSharedSettings } from './hooks.js';
 import type { RenderContext } from './templates.js';
-import {
-  GH_WORKFLOW,
-  agentsBlock,
-  claudeSkill,
-  cursorRule,
-  guardHookJson,
-  windsurfRule,
-} from './templates.js';
+import { GH_WORKFLOW, agentsBlock, claudeMdBlock, skillFile } from './templates.js';
 
 export type { RenderContext };
 
 export type Scope = 'project' | 'user';
 
 /**
- * `create` owns the whole file; `merge-json` inserts one key into an existing settings
- * file; `merge-markers` owns only the delimited block inside a file the user also writes in.
+ * `create` owns the whole file; `merge-json` inserts our hooks into a settings file the user
+ * also writes in; `merge-markers` owns only the delimited block inside a shared markdown file.
  */
 export type Strategy = 'create' | 'merge-json' | 'merge-markers';
+
+export interface TargetFile {
+  path: string;
+  strategy: Strategy;
+  render(ctx: RenderContext): string;
+  /** What this file is, for the plan line. */
+  kind: 'skill' | 'hooks' | 'rules' | 'ci';
+}
 
 export interface Target {
   id: string;
   label: string;
   hint: string;
   scopes: Scope[];
-  path(scope: Scope, cwd: string, home: string): string | null;
-  strategy: Strategy;
-  /** Templates that do not depend on the machine simply ignore the context. */
-  render(ctx: RenderContext): string;
+  files(scope: Scope, cwd: string, home: string, ctx: RenderContext): TargetFile[];
   /** Heuristic: does this repo/machine already use this tool? */
   detect(scope: Scope, cwd: string, home: string): boolean;
+  /**
+   * True when this target installs a hook that the guard actually runs. Structural, not
+   * inferred: an earlier version decided this by grepping the summary prose for the word
+   * "warns", so rewording the summary silently changed which questions `init` asked.
+   */
+  guardable?: boolean;
   /** Why it is unavailable in a scope, shown greyed out instead of hidden. */
   unavailable?(scope: Scope): string | null;
+  /**
+   * What it protects and what it cannot, given the moments actually installed. Printed after
+   * install, verbatim. Takes the chosen moments so the summary can never claim coverage the
+   * user declined.
+   */
+  explain?(chosen?: Moment[]): string[];
 }
 
 /** True when any of the given paths exists — the whole detection vocabulary. */
@@ -46,107 +64,139 @@ function any(...paths: string[]): boolean {
   return paths.some((p) => existsSync(p));
 }
 
-export const TARGETS: Target[] = [
-  {
-    id: 'claude-skill',
-    label: 'Claude Code · skill: audit + fix',
-    hint: 'the /vibeward skill, invoked by name or picked up automatically',
-    scopes: ['project', 'user'],
-    strategy: 'create',
-    // The directory name is what creates the `/vibeward` command; the frontmatter `name`
-    // only labels it, so the folder must stay called `vibeward`.
-    path: (scope, cwd, home) =>
-      join(scope === 'user' ? home : cwd, '.claude', 'skills', 'vibeward', 'SKILL.md'),
-    render: claudeSkill,
-    detect: (scope, cwd, home) =>
-      scope === 'user'
-        ? any(join(home, '.claude'))
-        : any(join(cwd, '.claude'), join(cwd, 'CLAUDE.md')),
-  },
-  {
-    id: 'claude-hook',
-    label: 'Claude Code · guard hook',
-    hint: 'blocks risky prompts before the agent acts on them',
-    scopes: ['project', 'user'],
-    strategy: 'merge-json',
-    // settings.json and not settings.local.json: the project file is meant to be committed
-    // and shared, and hooks merge across levels instead of replacing each other.
-    path: (scope, cwd, home) => join(scope === 'user' ? home : cwd, '.claude', 'settings.json'),
-    render: (ctx) => guardHookJson(ctx),
-    detect: (scope, cwd, home) =>
-      scope === 'user'
-        ? any(join(home, '.claude'))
-        : any(join(cwd, '.claude'), join(cwd, 'CLAUDE.md')),
-  },
-  {
-    id: 'cursor',
-    label: 'Cursor · rule',
-    hint: 'applied when the request looks related (Apply Intelligently)',
-    scopes: ['project'],
-    strategy: 'create',
-    path: (scope, cwd, _home) =>
-      scope === 'user' ? null : join(cwd, '.cursor', 'rules', 'vibeward.mdc'),
-    render: cursorRule,
-    detect: (scope, cwd, _home) =>
-      scope === 'project' && any(join(cwd, '.cursor'), join(cwd, '.cursorrules')),
+function at(scope: Scope, cwd: string, home: string, relative: string): string {
+  return join(scope === 'user' ? home : cwd, relative);
+}
+
+/**
+ * The first path segment, which is also the directory that tells us the tool is in use:
+ * `.cursor/skills/vibeward/SKILL.md` detects on `.cursor`.
+ */
+function root(relative: string): string {
+  return relative.split('/')[0] ?? relative;
+}
+
+/** Every host becomes one target: its skill, plus its hook manifest when it has one. */
+function hostTarget(host: Host): Target {
+  const moments = (['prompt', 'action', 'content'] as Moment[]).filter(
+    (m) => host.moments[m].event !== null,
+  );
+
+  return {
+    id: host.id,
+    label: host.label,
+    hint: moments.length > 0 ? `skill + guard (${moments.join(', ')})` : 'skill only',
+    scopes: host.skill.user ? ['project', 'user'] : ['project'],
+    guardable: host.hooks !== null && moments.length > 0,
+    files(scope, cwd, home, ctx) {
+      const relative =
+        scope === 'user' ? (host.skill.user ?? host.skill.project) : host.skill.project;
+      const out: TargetFile[] = [
+        {
+          path: at(scope, cwd, home, relative),
+          strategy: 'create',
+          render: skillFile,
+          kind: 'skill',
+        },
+      ];
+
+      // The guard is only written for moments this host can actually act on AND the user
+      // asked for. A manifest entry for an event whose output the host discards costs a
+      // process launch per turn and buys nothing.
+      const wanted = ctx.moments.filter((m) => host.moments[m].event !== null);
+      if (host.hooks && wanted.length > 0) {
+        const hookRelative = scope === 'user' ? host.hooks.user : host.hooks.project;
+        out.push({
+          path: at(scope, cwd, home, hookRelative),
+          strategy: isSharedSettings(host) ? 'merge-json' : 'create',
+          render: (c) =>
+            hookFile(
+              host,
+              c,
+              c.moments.filter((m) => host.moments[m].event !== null),
+            ),
+          kind: 'hooks',
+        });
+      }
+      return out;
+    },
+    detect(scope, cwd, home) {
+      const relative =
+        scope === 'user' ? (host.skill.user ?? host.skill.project) : host.skill.project;
+      return any(at(scope, cwd, home, root(relative)));
+    },
     unavailable: (scope) =>
-      scope === 'user' ? 'Cursor keeps user rules in its settings UI, not in a file on disk' : null,
+      scope === 'user' && !host.skill.user
+        ? `${host.label} keeps this per project, not per machine`
+        : null,
+    explain: (chosen) => explain(host, chosen),
+  };
+}
+
+export const TARGETS: Target[] = [
+  ...HOSTS.map(hostTarget),
+  {
+    id: 'claude-md',
+    label: 'CLAUDE.md · always-on rules',
+    hint: 'the short security rules, in context on every turn — not the audit procedure',
+    scopes: ['project', 'user'],
+    files: (scope, cwd, home) => [
+      {
+        path: scope === 'user' ? join(home, '.claude', 'CLAUDE.md') : join(cwd, 'CLAUDE.md'),
+        strategy: 'merge-markers',
+        render: claudeMdBlock,
+        kind: 'rules',
+      },
+    ],
+    detect: (scope, cwd, home) =>
+      scope === 'user'
+        ? any(join(home, '.claude'))
+        : any(join(cwd, 'CLAUDE.md'), join(cwd, '.claude')),
+    explain: () => [
+      'applies when the agent improvises, with no skill invoked and no scan running',
+      'it is instructions, not enforcement — nothing stops an agent that ignores them',
+    ],
   },
   {
     id: 'agents-md',
     label: 'AGENTS.md · universal fallback',
-    hint: 'read by Codex, Copilot, Cursor, Windsurf, Jules, Aider and ~20 more',
+    hint: 'read by the agents that do not load skills',
     scopes: ['project', 'user'],
-    strategy: 'merge-markers',
     // Codex is the one tool with a user-level AGENTS.md; the open standard defines none.
-    path: (scope, cwd, home) =>
-      scope === 'user' ? join(home, '.codex', 'AGENTS.md') : join(cwd, 'AGENTS.md'),
-    render: agentsBlock,
+    files: (scope, cwd, home) => [
+      {
+        path: scope === 'user' ? join(home, '.codex', 'AGENTS.md') : join(cwd, 'AGENTS.md'),
+        strategy: 'merge-markers',
+        render: agentsBlock,
+        kind: 'rules',
+      },
+    ],
     detect: (scope, cwd, home) =>
       scope === 'user' ? any(join(home, '.codex')) : any(join(cwd, 'AGENTS.md')),
-  },
-  {
-    id: 'windsurf',
-    label: 'Windsurf / Devin · rule',
-    hint: 'workspace rule, activated by the model when relevant',
-    scopes: ['project'],
-    strategy: 'create',
-    path: (scope, cwd, _home) => {
-      if (scope === 'user') return null;
-      // Windsurf became Devin Desktop in June 2026: `.devin/rules` is now the preferred
-      // path and `.windsurf/rules` the legacy fallback, and both are still read. Writing
-      // where this repo already keeps its rules means an older install still finds it.
-      const legacy = join(cwd, '.windsurf', 'rules');
-      if (!existsSync(join(cwd, '.devin')) && existsSync(legacy))
-        return join(legacy, 'vibeward.md');
-      return join(cwd, '.devin', 'rules', 'vibeward.md');
-    },
-    render: windsurfRule,
-    detect: (scope, cwd, _home) =>
-      scope === 'project' &&
-      any(join(cwd, '.devin'), join(cwd, '.windsurf'), join(cwd, '.windsurfrules')),
-    // TODO(verify): the user-level file is documented at
-    // ~/.codeium/windsurf/memories/global_rules.md, but that path still carries the
-    // pre-rebrand name and no ~/.devin equivalent was confirmed. It is also a single
-    // always-on file capped at 6.000 characters, shared with every rule the user wrote by
-    // hand. Re-verify before writing into it; per-project rules cost nothing meanwhile.
-    unavailable: (scope) =>
-      scope === 'user'
-        ? 'Windsurf keeps global rules in one always-on file — install it per project instead'
-        : null,
+    explain: () => [
+      'the fallback for Aider, Jules and anything else with no skills directory',
+      'instructions only — no host enforces an AGENTS.md',
+    ],
   },
   {
     id: 'gh-action',
     label: 'GitHub Action · scan on every push',
     hint: 'uploads findings as SARIF to the repository Security tab',
     scopes: ['project'],
-    strategy: 'create',
-    path: (scope, cwd, _home) =>
-      scope === 'user' ? null : join(cwd, '.github', 'workflows', 'vibeward.yml'),
-    render: () => GH_WORKFLOW,
-    detect: (scope, cwd, _home) => scope === 'project' && any(join(cwd, '.github')),
+    files: (_scope, cwd) => [
+      {
+        path: join(cwd, '.github', 'workflows', 'vibeward.yml'),
+        strategy: 'create',
+        render: () => GH_WORKFLOW,
+        kind: 'ci',
+      },
+    ],
+    detect: (scope, cwd) => scope === 'project' && any(join(cwd, '.github')),
     unavailable: (scope) =>
       scope === 'user' ? 'GitHub workflows always live inside a repository' : null,
+    explain: () => [
+      'runs the scan on push and pull request, and reports — it never fails a fix in',
+    ],
   },
 ];
 
@@ -156,5 +206,5 @@ export function findTarget(id: string): Target | null {
 
 /** The targets installable in a scope, in menu order. */
 export function targetsFor(scope: Scope): Target[] {
-  return TARGETS.filter((t) => t.scopes.includes(scope));
+  return TARGETS.filter((t) => t.scopes.includes(scope) && !t.unavailable?.(scope));
 }
