@@ -1,4 +1,4 @@
-import type { Finding, Severity } from '../core/types.js';
+import type { Finding, FindingES, Severity } from '../core/types.js';
 
 interface ExpectedHeader {
   header: string;
@@ -9,6 +9,8 @@ interface ExpectedHeader {
   why: string;
   exploit: string;
   references: string[];
+  /** Spanish prose for `--lang es`. `label` is the header name, so it is composed below. */
+  es: { label: string; why: string; exploit: string };
 }
 
 const EXPECTED: ExpectedHeader[] = [
@@ -25,6 +27,12 @@ const EXPECTED: ExpectedHeader[] = [
       'https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP',
       'https://cwe.mitre.org/data/definitions/693.html',
     ],
+    es: {
+      label: 'Content-Security-Policy',
+      exploit:
+        'Sin CSP, un script inyectado o de terceros puede cargarse y ejecutarse desde cualquier origen, y sacar de ahí tokens o datos de usuarios.',
+      why: 'Falta la principal defensa en profundidad contra el cross-site scripting.',
+    },
   },
   {
     header: 'strict-transport-security',
@@ -38,6 +46,12 @@ const EXPECTED: ExpectedHeader[] = [
     references: [
       'https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Strict-Transport-Security',
     ],
+    es: {
+      label: 'Strict-Transport-Security (HSTS)',
+      exploit:
+        'Un atacante en la ruta de red puede forzar a la víctima a HTTP plano en la primera petición e interceptar credenciales o cookies de sesión.',
+      why: 'HTTPS no queda fijado para las visitas siguientes, así que el navegador está dispuesto a volver a probar HTTP plano la próxima vez. La cabecera le dice que no lo haga nunca durante un plazo declarado — `Strict-Transport-Security: max-age=63072000; includeSubDomains` es el valor habitual, y va en el CDN o en el servidor, no en la página.',
+    },
   },
   {
     header: 'x-frame-options',
@@ -49,6 +63,12 @@ const EXPECTED: ExpectedHeader[] = [
       'The app can be embedded in a hidden iframe on a malicious page to trick users into clicking actions (clickjacking).',
     why: 'No framing protection (also settable via CSP frame-ancestors).',
     references: ['https://cwe.mitre.org/data/definitions/1021.html'],
+    es: {
+      label: 'X-Frame-Options',
+      exploit:
+        'La aplicación se puede incrustar en un iframe oculto dentro de una página maliciosa para que el usuario pulse acciones sin saberlo (clickjacking).',
+      why: 'No hay protección contra el enmarcado (también se puede fijar con `frame-ancestors` en la CSP).',
+    },
   },
   {
     header: 'x-content-type-options',
@@ -62,6 +82,12 @@ const EXPECTED: ExpectedHeader[] = [
     references: [
       'https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options',
     ],
+    es: {
+      label: 'X-Content-Type-Options',
+      exploit:
+        'El navegador puede deducir por los bytes un tipo distinto del declarado (MIME sniffing), lo que habilita algunos ataques de ejecución de scripts.',
+      why: 'Sin `X-Content-Type-Options: nosniff` el navegador puede desconfiar del Content-Type declarado y tratar un fichero como lo que parezcan sus bytes. El caso clásico es una imagen subida que además se interpreta como script. Es una cabecera con un valor y sin contrapartidas.',
+    },
   },
 ];
 
@@ -72,6 +98,12 @@ export function checkHeaders(headers: Headers): Finding[] {
 
   for (const e of EXPECTED) {
     if (!headers.get(e.header)) {
+      const es: FindingES = {
+        label: `Falta la cabecera ${e.es.label}`,
+        evidence: 'Ausente en la respuesta',
+        exploit: e.es.exploit,
+        why: e.es.why,
+      };
       findings.push({
         id: `missing_header_${e.header}`,
         label: `Missing ${e.label} header`,
@@ -82,6 +114,7 @@ export function checkHeaders(headers: Headers): Finding[] {
         exploit: e.exploit,
         why: e.why,
         references: e.references,
+        es,
       });
     }
   }
@@ -100,6 +133,12 @@ export function checkHeaders(headers: Headers): Finding[] {
           'Revealing the framework/server and its version lets an attacker look up known CVEs for that exact stack.',
         why: 'Information disclosure — hide the header at your host or framework.',
         references: ['https://cwe.mitre.org/data/definitions/200.html'],
+        es: {
+          label: `La cabecera ${h} revela la tecnología`,
+          exploit:
+            'Revelar el framework o el servidor y su versión permite a un atacante buscar CVEs conocidos de ese stack exacto.',
+          why: 'Fuga de información — oculta la cabecera en tu hosting o en tu framework.',
+        },
       });
     }
   }

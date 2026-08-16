@@ -27,6 +27,13 @@ export function checkNextConfigHeaders(path: string, content: string): Finding |
   if (hasHeaders) return null;
   return {
     id: 'nextjs_no_security_headers',
+    es: {
+      label: 'Next.js no envía cabeceras de seguridad',
+      evidence: 'next.config no tiene `headers()` ni declara CSP/X-Frame-Options.',
+      exploit:
+        'Sin cabeceras de seguridad la app se puede enmarcar para clickjacking, no tiene CSP que amortigüe un XSS ni HSTS que fije HTTPS.',
+      why: 'Añade un `headers()` asíncrono en next.config que devuelva CSP, HSTS, X-Frame-Options, X-Content-Type-Options y Referrer-Policy.',
+    },
     label: 'Next.js ships no security headers',
     severity: 'medium',
     check: 22,
@@ -51,6 +58,14 @@ export function checkServerActionAuth(path: string, content: string): Finding | 
   if (AUTH_GUARD.test(content)) return null;
   return {
     id: `unguarded_mutation_${path.replace(/[^A-Za-z0-9]/g, '_')}`,
+    es: {
+      label: 'Una server action o ruta modifica datos sin comprobación de autorización detectable',
+      evidence:
+        'Aquí se ejecuta un create/update/delete, pero no se encontró ninguna guarda de autorización (requireUser/getServerSession/auth…) en el fichero.',
+      exploit:
+        'Si la mutación es alcanzable sin una comprobación de autorización en el servidor, cualquier visitante puede dispararla — la comprobación en middleware o por cookie no basta (puede ser optimista o esquivable).',
+      why: 'Toda server action y todo route handler que escriba datos tiene que verificar en el servidor la identidad y el rol de quien llama. Comprueba que este proteja la mutación (o que sea público a propósito).',
+    },
     label: 'Server action / route mutates data without a detectable auth check',
     severity: 'high',
     check: 11,
@@ -71,6 +86,14 @@ export function checkExportFormulaInjection(path: string, content: string): Find
   if (FORMULA_SANITIZED.test(content)) return null;
   return {
     id: `formula_injection_${path.replace(/[^A-Za-z0-9]/g, '_')}`,
+    es: {
+      label: 'La exportación a hoja de cálculo/CSV puede permitir inyección de fórmulas',
+      evidence:
+        'Se escriben campos controlados por el usuario en una hoja de cálculo o CSV sin sanear el prefijo de fórmula.',
+      exploit:
+        'Un usuario guarda `=HYPERLINK(...)` o `=cmd|...` en un campo de texto; cuando alguien abre el fichero exportado, la hoja de cálculo lo ejecuta como fórmula (exfiltración de datos / DDE).',
+      why: 'Antepón una comilla simple a cualquier valor de celda que empiece por `= + - @` (o por tabulador o retorno de carro) antes de escribirlo.',
+    },
     label: 'Spreadsheet/CSV export may allow formula injection',
     severity: 'medium',
     check: 16,

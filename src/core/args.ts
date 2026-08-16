@@ -1,3 +1,6 @@
+import { isLang } from './i18n.js';
+import type { Lang } from './i18n.js';
+
 export interface Args {
   target?: string;
   supabaseUrl?: string;
@@ -27,6 +30,11 @@ export interface Args {
   yes?: boolean;
   out?: string;
   date?: string;
+  /**
+   * Language of the report. Defaults to English. The CLI itself is not translated: whoever
+   * typed the command reads English by definition, while the report goes to the site's owner.
+   */
+  lang?: Lang;
   /** `init` only: where to install. */
   scope?: 'project' | 'user';
   /** `init` only: which targets to write, bypassing the interactive picker. */
@@ -56,7 +64,12 @@ export function parseArgs(argv: string[]): Args {
     else if (a === '--sarif') args.sarif = argv[++i];
     else if (a === '--out') args.out = argv[++i];
     else if (a === '--date') args.date = argv[++i];
-    else if (a === '--scope') {
+    else if (a === '--lang') {
+      const v = argv[++i]?.toLowerCase();
+      // An unknown language falls through to the English default rather than failing the
+      // scan: the report is the point, and its language is a preference.
+      if (isLang(v)) args.lang = v;
+    } else if (a === '--scope') {
       const v = argv[++i];
       if (v === 'project' || v === 'user') args.scope = v;
     } else if (a === '--targets' || a === '--moments') {

@@ -34,6 +34,14 @@ export function sourceMapFinding(mapUrl: string, mapBody: string): Finding | nul
 
   return {
     id: `sourcemap_exposed_${fileName.replace(/[^A-Za-z0-9]/g, '_')}`,
+    es: {
+      label: 'Source map expuesto — el código fuente original se puede descargar',
+      evidence: `${mapUrl} se sirve públicamente${hasSource ? ' e incrusta el fuente original completo (sourcesContent)' : ''}.`,
+      exploit: `Cualquiera abre ${mapUrl} y reconstruye el fuente sin minificar — nombres de componentes, comentarios, configuración en línea y cualquier valor hardcodeado que el bundler dejara dentro.`,
+      impact:
+        'El código fuente original es legible por cualquiera, lo que convierte una caja negra en un libro abierto: cualquier otra debilidad pasa a ser mucho más fácil de encontrar, y los secretos que quedaran en el código se entregan directamente.',
+      why: 'Las builds de producción no deberían publicar source maps. Desactiva su emisión en producción, o elimina los ficheros `.map` de la salida desplegada.',
+    },
     label: 'Source map exposed — original source code is downloadable',
     severity: 'medium',
     check: 23,

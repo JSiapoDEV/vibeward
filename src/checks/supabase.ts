@@ -330,6 +330,17 @@ export function rlsFindings(rls: RlsResult): Finding[] {
     const cols = hasPII ? t.leakedColumns!.join(', ') : '';
     findings.push({
       id: `rls_exposed_${t.table}`,
+      es: {
+        label: `La tabla '${t.table}' es legible sin autenticación${hasPII ? ' (contiene datos personales)' : ''}`,
+        evidence: `${rows ?? '?'} filas legibles solo con la clave pública${hasPII ? `; columnas sensibles: ${cols}` : ''}`,
+        exploit: `Cualquier visitante envía \`GET /rest/v1/${t.table}?select=*\` con la clave pública (visible en el bundle de JS) y le devuelven todas las filas — sin iniciar sesión.`,
+        impact: hasPII
+          ? `~${rows ?? 'todos'} registros, incluidos ${cols}, son legibles ahora mismo por cualquiera en internet. Fuga de datos personales activa (exposición ante el RGPD y la protección al consumidor).`
+          : `~${rows ?? 'todas'} las filas son legibles por cualquiera que tenga la clave pública.`,
+        why: hasPII
+          ? 'Una tabla con datos personales es legible por todo el mundo. Esto es una brecha en curso, no un riesgo teórico: falta RLS o está mal configurada.'
+          : 'La tabla es legible por cualquier visitante. Hay que activar RLS y restringirla al propietario de cada fila.',
+      },
       label: `Table '${t.table}' readable without authentication${hasPII ? ' (contains personal data)' : ''}`,
       severity: hasPII ? 'critical' : 'high',
       check: 6,
@@ -355,6 +366,14 @@ export function rlsFindings(rls: RlsResult): Finding[] {
   for (const t of rls.writable) {
     findings.push({
       id: `rls_writable_${t.table}`,
+      es: {
+        label: `La tabla '${t.table}' es escribible sin autenticación`,
+        evidence: 'La API REST aceptó una escritura sin autenticar (un insert vacío).',
+        exploit: `Cualquier visitante puede hacer POST/PATCH sobre \`${t.table}\` con la clave pública — el modo de fallo de Moltbook: alterar filas, inyectar contenido o corromper la base de datos, sin iniciar sesión.`,
+        impact:
+          'Las escrituras sin autenticar permiten que cualquiera altere o destruya tus datos y, en tablas de contenido, inyecte cargas que después ejecutan otros usuarios o agentes.',
+        why: 'Ni RLS ni las políticas están limitando las escrituras en esta tabla. Añade una política con `WITH CHECK` y quita los permisos de escritura al rol anon.',
+      },
       label: `Table '${t.table}' is writable without authentication`,
       severity: 'critical',
       check: 6,
@@ -381,6 +400,14 @@ export function rlsFindings(rls: RlsResult): Finding[] {
 export function graphqlIntrospectionFinding(projectUrl: string): Finding {
   return {
     id: 'graphql_introspection',
+    es: {
+      label: 'La introspección de GraphQL está habilitada para llamantes anónimos',
+      evidence:
+        'Una consulta de introspección `__schema` devolvió el grafo de tipos completo con la clave pública.',
+      exploit:
+        'Un atacante sin autenticar mapea el esquema entero de la base de datos — todas las tablas, columnas y relaciones — lo que le señala exactamente dónde están los datos sensibles y las políticas débiles.',
+      why: 'La introspección le entrega al atacante un mapa completo. Restringe el endpoint de pg_graphql, o acéptalo solo si todo el esquema es público a propósito.',
+    },
     label: 'GraphQL introspection is enabled for anonymous callers',
     severity: 'medium',
     check: 23,
@@ -494,6 +521,13 @@ export function analyzeSupabaseExport(json: unknown): Finding[] {
   for (const t of data.tables_without_rls ?? []) {
     findings.push({
       id: `rls_disabled_${t.table}`,
+      es: {
+        label: `La tabla \`${t.table}\` tiene Row Level Security desactivada`,
+        evidence: 'relrowsecurity = false en la base de datos en vivo',
+        exploit:
+          'Con RLS desactivada, la tabla es accesible por la API REST pública con la clave anon — cualquier visitante puede leer (y posiblemente escribir) sus filas.',
+        why: 'Activa RLS y añade políticas acotadas al propietario. Sin RLS, ninguna política protege los datos.',
+      },
       label: `Table \`${t.table}\` has Row Level Security disabled`,
       severity: 'high',
       check: 6,
@@ -514,6 +548,13 @@ export function analyzeSupabaseExport(json: unknown): Finding[] {
   for (const p of data.permissive_policies ?? []) {
     findings.push({
       id: 'permissive_policy',
+      es: {
+        label: `La política \`${p.policy}\` sobre \`${p.table}\` permite a todo el mundo`,
+        evidence: `La política "${p.policy}" tiene USING (true)`,
+        exploit:
+          'La política casa con todas las filas para todos los usuarios, así que RLS está desactivada de hecho en esta tabla.',
+        why: 'Filtra por el propietario, por ejemplo `auth.uid() = user_id`.',
+      },
       label: `Policy \`${p.policy}\` on \`${p.table}\` allows everyone`,
       severity: 'critical',
       check: 7,
@@ -530,6 +571,13 @@ export function analyzeSupabaseExport(json: unknown): Finding[] {
   for (const fn of data.security_definer_functions ?? []) {
     findings.push({
       id: 'security_definer',
+      es: {
+        label: `La función \`${fn.function}\` se ejecuta como su propietario (SECURITY DEFINER)`,
+        evidence: 'prosecdef = true',
+        exploit:
+          'Una función SECURITY DEFINER se ejecuta con privilegios elevados y se salta RLS. Si cualquiera puede llamarla y no está bien acotada, puede filtrar o modificar datos.',
+        why: 'Revísala: fija el search_path, valida las entradas y restringe quién puede ejecutarla.',
+      },
       label: `Function \`${fn.function}\` runs as its owner (SECURITY DEFINER)`,
       severity: 'medium',
       check: 10,

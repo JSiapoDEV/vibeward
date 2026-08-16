@@ -31,6 +31,12 @@ export interface CrawlResult {
   pages: CrawledPage[];
   files: SiteFiles;
   brokenAssets: BrokenAsset[];
+  /**
+   * How many referenced files were actually requested. Zero broken assets out of zero
+   * requests is not a clean bill of health, and the report needs to be able to tell the
+   * difference between "nothing is broken" and "there was nothing to check".
+   */
+  assetsChecked: number;
 }
 
 const MAX_PAGES = 8;
@@ -301,6 +307,7 @@ async function runCrawl(result: CrawlResult, home: string, homeHtml: string): Pr
 
   for (const asset of discoverAssets(homeHtml, home).slice(0, MAX_ASSETS)) {
     const res = await fetchText(asset, ASSET_TIMEOUT);
+    result.assetsChecked++;
     // Only a real error response counts. `status === 0` is our own timeout, DNS failure or
     // reset — evidence about this network, not about the site, and the report would present
     // it as "answers with 4xx/5xx", which would simply be untrue.
@@ -328,6 +335,7 @@ export async function crawlSite(homeUrl: string, homeHtml: string): Promise<Craw
       notFound: { status: 0, distinct: true },
     },
     brokenAssets: [],
+    assetsChecked: 0,
   };
 
   try {

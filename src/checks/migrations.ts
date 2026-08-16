@@ -90,6 +90,13 @@ export function analyzeMigrations(
       const name = m[1]!.toLowerCase();
       findings.push({
         id: `rls_turned_off_${name}`,
+        es: {
+          label: `Row Level Security se apaga en \`${name}\``,
+          exploit:
+            'En cuanto RLS se apaga, todas las políticas de la tabla dejan de aplicarse y la tabla entera queda legible — y a menudo escribible — por la API REST pública con la clave anon que viaja en el bundle del navegador.',
+          impact: `Todas las filas de \`${name}\` quedan expuestas a cualquiera que abra el sitio y mire su tráfico de red. Si la tabla guarda datos de usuarios, es una fuga de datos en curso desde que se aplicó la migración.`,
+          why: 'Desactivar RLS es el reflejo habitual cuando una consulta no devuelve filas, porque hace desaparecer el error. El error era la protección funcionando: el arreglo es una política que case con las filas previstas, por ejemplo `USING (auth.uid() = user_id)`.',
+        },
         label: `Row Level Security is switched off on \`${name}\``,
         severity: 'critical',
         check: 6,
@@ -110,6 +117,12 @@ export function analyzeMigrations(
       const name = m[1]!.toLowerCase();
       findings.push({
         id: `policy_dropped_${name}`,
+        es: {
+          label: `Se elimina una política de \`${name}\``,
+          exploit:
+            'Una tabla con RLS activada y sin políticas no casa con nada y se lo deniega a todo el mundo, lo que se lee como una app rota — y el siguiente paso habitual es desactivar RLS en lugar de volver a escribir la política.',
+          why: 'Eliminar una política solo es seguro si queda otra que conceda el acceso que la aplicación necesita. Comprueba qué queda en la tabla antes de aplicar esto.',
+        },
         label: `A policy is dropped from \`${name}\``,
         severity: 'medium',
         check: 6,
@@ -128,6 +141,12 @@ export function analyzeMigrations(
     while ((m = PERMISSIVE_POLICY.exec(content)) !== null) {
       findings.push({
         id: 'permissive_policy',
+        es: {
+          label: 'Una política de Row Level Security permite a todo el mundo (`USING (true)`)',
+          exploit:
+            'Una política con `USING (true)` casa con todas las filas para todos los usuarios, así que RLS está desactivada de hecho en esta tabla.',
+          why: 'La política existe pero concede acceso a todo el mundo. Filtra por el propietario, por ejemplo `auth.uid() = user_id`.',
+        },
         label: 'Row Level Security policy allows everyone (`USING (true)`)',
         severity: 'critical',
         check: 7,
@@ -145,6 +164,12 @@ export function analyzeMigrations(
     while ((m = SECURITY_DEFINER.exec(content)) !== null) {
       findings.push({
         id: 'security_definer',
+        es: {
+          label: 'Una función se ejecuta como su propietario (`SECURITY DEFINER`)',
+          exploit:
+            'Una función SECURITY DEFINER se ejecuta con los privilegios de quien la definió, saltándose RLS. Si cualquiera puede llamarla y no está bien acotada, puede filtrar o modificar datos.',
+          why: 'Revisa cada función SECURITY DEFINER: fija el `search_path`, valida las entradas y restringe quién puede ejecutarla.',
+        },
         label: 'Function runs as its owner (`SECURITY DEFINER`)',
         severity: 'medium',
         check: 10,
@@ -164,6 +189,12 @@ export function analyzeMigrations(
       const writes = /\b(insert|update|delete|all)\b/i.test(privileges);
       findings.push({
         id: `grant_anon_${m[2]!.toLowerCase()}`,
+        es: {
+          label: `La tabla \`${m[2]}\` concede acceso ${writes ? 'de escritura ' : ''}al rol ${m[3]!.toLowerCase()}`,
+          exploit: writes
+            ? 'Conceder INSERT/UPDATE/DELETE a anon permite que cualquier visitante sin autenticar escriba en la tabla por la API REST pública, incluso con RLS activada si ninguna política WITH CHECK lo limita.'
+            : 'Conceder privilegios de tabla al rol anon/public amplía lo que puede alcanzar un llamante sin autenticar.',
+        },
         label: `Table \`${m[2]}\` grants ${writes ? 'write ' : ''}access to the ${m[3]!.toLowerCase()} role`,
         severity: writes ? 'high' : 'medium',
         check: 6,
@@ -183,6 +214,13 @@ export function analyzeMigrations(
     if (flagMissingRls && !rlsEnabled.has(name)) {
       findings.push({
         id: `rls_disabled_${name}`,
+        es: {
+          label: `La tabla \`${name}\` se crea sin Row Level Security`,
+          evidence: `No se encontró ningún \`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY\` en las migraciones`,
+          exploit:
+            'Con RLS desactivada, la tabla es accesible por la API pública usando la clave anon — cualquier visitante puede leer (y posiblemente escribir) sus filas.',
+          why: 'Toda tabla con datos de usuarios debe activar RLS y añadir políticas acotadas al propietario. Sin RLS, las políticas no hacen nada.',
+        },
         label: `Table \`${name}\` created without Row Level Security`,
         severity: 'high',
         check: 6,

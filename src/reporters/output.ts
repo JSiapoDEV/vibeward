@@ -6,6 +6,8 @@ import { analyzeSupabaseExport } from '../checks/supabase.js';
 import type { RlsResult } from '../checks/supabase.js';
 import type { StackFingerprint } from '../checks/web.js';
 import type { Finding, SuppressedFinding } from '../core/types.js';
+import { localize, localizeFingerprint } from '../core/i18n.js';
+import type { CoverageLine, Lang } from '../core/i18n.js';
 import { C, log, todayISO } from '../core/terminal.js';
 import { VERSION, stalenessNotice } from '../core/version.js';
 
@@ -17,6 +19,10 @@ export interface FinishOptions {
   sarif?: string;
   /** Print the JSON payload on stdout instead of writing report files. */
   stdout?: boolean;
+  /** Report language. Defaults to English. */
+  lang?: Lang;
+  /** False in `--passive`: nothing beyond publicly-served assets was requested. */
+  active?: boolean;
 }
 
 /** Website context that only the URL scanner produces. */
@@ -24,19 +30,33 @@ export interface FinishExtras {
   fingerprint?: StackFingerprint | null;
   consoleChecked?: boolean;
   suppressed?: SuppressedFinding[];
-  notApplicable?: Map<string, string>;
+  notApplicable?: Map<string, CoverageLine>;
+  notEvaluated?: Map<string, CoverageLine>;
   configPath?: string | null;
 }
 
 /**
+ * Base name of the report file, in the language the report is written in.
+ *
+ * A file called `informe-` holding an English document was the smallest possible version of
+ * the same defect the `--lang` flag exists to fix: the tool guessing at the reader's language
+ * in one place and ignoring it in every other.
+ */
+const REPORT_STEM: Record<Lang, string> = { en: 'vibeward-report', es: 'informe' };
+
+/**
  * Bumped whenever the `--stdout` payload changes shape. Agents can rely on it.
+ *
+ * 3 — a `lang` key, and the prose of every finding written in that language. An agent that
+ * summarises `why` for a user now needs to know which language it is holding, and the `es`
+ * overlay is applied and dropped before serialising, so no finding ever carries both.
  *
  * 2 — `fix` and `autofix` removed from every finding. They were the channel that told an
  * agent what to go and change, and vibeward reports rather than repairs; the remediation a
  * person needs is in `why`. Unrelated to the `schemaVersion` in `vibeward.json`, which is
  * the config format and is still 1.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 /**
  * Writes every byte to stdout before returning, then the caller may exit.
@@ -78,21 +98,34 @@ export function finish(
   target: string,
   findings: Finding[],
   rls: RlsResult | null,
-  scanned: string[],
+  scanned: CoverageLine[],
   opts: FinishOptions,
   extras: FinishExtras = {},
 ): never {
   const dateISO = opts.date ?? todayISO();
+  const lang: Lang = opts.lang ?? 'en';
+  // Translated once, here, so the markdown, the JSON payload and the SARIF file can never
+  // disagree about what a finding says.
+  const localized = findings.map((f) => localize(f, lang));
+  const fingerprint = extras.fingerprint ? localizeFingerprint(extras.fingerprint, lang) : null;
+  const suppressed = (extras.suppressed ?? []).map((s) => ({
+    ...s,
+    finding: localize(s.finding, lang),
+  }));
+
   const { markdown, counts, webCounts, verdict } = buildReport({
     target,
     dateISO,
-    findings,
+    findings: localized,
     rls,
     scanned,
-    fingerprint: extras.fingerprint,
+    lang,
+    active: opts.active ?? true,
+    fingerprint,
     consoleChecked: extras.consoleChecked,
-    suppressed: extras.suppressed,
+    suppressed,
     notApplicable: extras.notApplicable,
+    notEvaluated: extras.notEvaluated,
     configPath: extras.configPath,
   });
 
@@ -102,14 +135,15 @@ export function finish(
     version: VERSION,
     target,
     dateISO,
+    lang,
     verdict,
     counts,
     webCounts,
-    fingerprint: extras.fingerprint ?? null,
-    findings,
+    fingerprint,
+    findings: localized,
     // An agent reading this must see what was silenced, or it will "verify" a fix that was
     // never applied and report a site as clean because someone edited a config file.
-    suppressed: (extras.suppressed ?? []).map((s) => ({
+    suppressed: suppressed.map((s) => ({
       id: s.finding.id,
       label: s.finding.label,
       severity: s.finding.severity,
@@ -124,16 +158,17 @@ export function finish(
   if (opts.stdout) {
     writeAllSync(`${JSON.stringify(payload, null, 2)}\n`);
     if (opts.out) writeFileSync(opts.out, markdown, 'utf8');
-    if (opts.sarif) writeFileSync(opts.sarif, toSarif(findings, VERSION), 'utf8');
+    if (opts.sarif) writeFileSync(opts.sarif, toSarif(localized, VERSION), 'utf8');
     process.exit(counts.critical > 0 ? 2 : 0);
   }
 
-  const outPath = opts.out ?? `informe-${basename(target).replace(/[^\w.-]/g, '_') || 'scan'}.md`;
+  const outPath =
+    opts.out ?? `${REPORT_STEM[lang]}-${basename(target).replace(/[^\w.-]/g, '_') || 'scan'}.md`;
   writeFileSync(outPath, markdown, 'utf8');
   if (opts.json) {
     writeFileSync(`${outPath.replace(/\.md$/, '')}.json`, JSON.stringify(payload, null, 2), 'utf8');
   }
-  if (opts.sarif) writeFileSync(opts.sarif, toSarif(findings, VERSION), 'utf8');
+  if (opts.sarif) writeFileSync(opts.sarif, toSarif(localized, VERSION), 'utf8');
 
   log(`\n${C.bold}── Summary ──${C.reset}`);
   const line = (c: string, label: string, n: number): void => {
@@ -153,8 +188,8 @@ export function finish(
   if (extras.suppressed?.length) {
     log(`  ${C.yellow}⊘ Suppressed by config: ${extras.suppressed.length}${C.reset}`);
   }
-  if (extras.fingerprint) {
-    const { score, total } = extras.fingerprint;
+  if (fingerprint) {
+    const { score, total } = fingerprint;
     log(`  ${C.dim}Vibe-coded fingerprint: ${score}/${total}${C.reset}`);
   }
 

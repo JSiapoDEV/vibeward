@@ -8,6 +8,8 @@
 //   · suppressed     — evaluated, failed, and silenced on purpose, with a written reason.
 // Collapsing them would let "we never looked" read as "we looked and it was fine".
 import { existsSync, readFileSync } from 'node:fs';
+import { coverage } from './i18n.js';
+import type { CoverageLine } from './i18n.js';
 import { isAbsolute, join, resolve } from 'node:path';
 import { WEB_CHECKS } from '../checks/web.js';
 import { isWeb } from './types.js';
@@ -23,11 +25,12 @@ function suppressibleIds(): Set<string> {
 }
 
 /** Checks that stop making sense once the site declares what it is. */
-const BY_SITE_TYPE: Record<string, { ids: string[]; reason: string }> = {
-  website: { ids: [], reason: '' },
+const BY_SITE_TYPE: Record<string, { ids: string[]; reason: string; reasonEs: string }> = {
+  website: { ids: [], reason: '', reasonEs: '' },
   app: {
     ids: ['web_missing_llms_txt', 'web_missing_structured_data', 'web_missing_sitemap'],
     reason: 'declared as a web app, not a content site',
+    reasonEs: 'declarado como aplicación web, no como sitio de contenido',
   },
   internal: {
     ids: [
@@ -42,6 +45,7 @@ const BY_SITE_TYPE: Record<string, { ids: string[]; reason: string }> = {
       'web_robots_blocks_ai',
     ],
     reason: 'declared as an internal tool — not meant to be found',
+    reasonEs: 'declarado como herramienta interna — no está pensado para que lo encuentren',
   },
 };
 
@@ -189,19 +193,29 @@ export function loadConfig(explicit: string | undefined, near?: string): ConfigL
  * Checks that do not apply to this site, mapped to the reason shown in the report. These are
  * never evaluated, so the report says "not applicable" and not "ok".
  */
-export function notApplicableChecks(config: VibewardConfig): Map<string, string> {
-  const out = new Map<string, string>();
+export function notApplicableChecks(config: VibewardConfig): Map<string, CoverageLine> {
+  const out = new Map<string, CoverageLine>();
   const intent = config.intent ?? {};
 
   const byType = BY_SITE_TYPE[intent.siteType ?? 'website'];
-  if (byType) for (const id of byType.ids) out.set(id, byType.reason);
+  if (byType) for (const id of byType.ids) out.set(id, coverage(byType.reason, byType.reasonEs));
 
   if (intent.aiCrawlers === 'blocked') {
-    out.set('web_robots_blocks_ai', 'AI crawlers are blocked on purpose (intent.aiCrawlers)');
-    out.set('web_missing_llms_txt', 'AI crawlers are blocked on purpose (intent.aiCrawlers)');
+    const onPurpose = coverage(
+      'AI crawlers are blocked on purpose (intent.aiCrawlers)',
+      'los rastreadores de IA se bloquean a propósito (intent.aiCrawlers)',
+    );
+    out.set('web_robots_blocks_ai', onPurpose);
+    out.set('web_missing_llms_txt', onPurpose);
   } else {
     // The inverted check only means anything against a declared intention to block.
-    out.set('web_ai_block_incomplete', 'no declared intent to block AI crawlers');
+    out.set(
+      'web_ai_block_incomplete',
+      coverage(
+        'no declared intent to block AI crawlers',
+        'no se declaró intención de bloquear rastreadores de IA',
+      ),
+    );
   }
 
   return out;

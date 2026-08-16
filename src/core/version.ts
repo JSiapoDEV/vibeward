@@ -39,5 +39,8 @@ export function stalenessNotice(now: Date = new Date()): string | null {
   if (days === null || days < STALE_AFTER_DAYS) return null;
   const months = Math.floor(days / 30);
   const age = months >= 2 ? `${months} months` : `${days} days`;
-  return `This vibeward is ${age} old (v${VERSION}, released ${RELEASED}). The guard's rules only cover phrasings that existed then — update with \`npm i -g vibeward@latest\`.`;
+  // The command has to be the one that actually updates the thing complaining. The hook is a
+  // version pinned into a settings.json, so nothing a package manager does reaches it — only
+  // re-running `init`, which rewrites the pin in place.
+  return `This vibeward is ${age} old (v${VERSION}, released ${RELEASED}). The guard's rules only cover phrasings that existed then — update with \`npx vibeward@latest init\`.`;
 }

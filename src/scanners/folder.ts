@@ -5,6 +5,8 @@ import { scanBackendFile } from '../checks/backend.js';
 import { analyzeMigrations } from '../checks/migrations.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { C, log } from '../core/terminal.js';
+import { coverage } from '../core/i18n.js';
+import type { CoverageLine } from '../core/i18n.js';
 import type { Args } from '../core/args.js';
 import type { Finding } from '../core/types.js';
 
@@ -153,20 +155,32 @@ export function runFolderScan(dir: string, args: Args): never {
   log(
     `${C.gray}▸ ${filesScanned} file(s) scanned, ${migrations.length} SQL file(s) found${C.reset}`,
   );
-  const scanned = [
-    `Source files in ${dir} (secrets, committed .env, Next.js headers, server-action auth, formula injection)`,
+  const scanned: CoverageLine[] = [
+    coverage(
+      `Source files in ${dir} (secrets, committed .env, Next.js headers, server-action auth, formula injection)`,
+      `Ficheros fuente en ${dir} (secretos, .env commiteado, cabeceras de Next.js, autorización en server actions, inyección de fórmulas)`,
+    ),
   ];
 
   if (migrations.length) {
     findings.push(...analyzeMigrations(migrations, { supabaseContext }));
     scanned.push(
-      `Supabase/SQL migrations (RLS, permissive policies, SECURITY DEFINER, anon grants)`,
+      coverage(
+        `Supabase/SQL migrations (RLS, permissive policies, SECURITY DEFINER, anon grants)`,
+        `Migraciones de Supabase/SQL (RLS, políticas permisivas, SECURITY DEFINER, permisos a anon)`,
+      ),
     );
   }
   if (args.supabaseJson) {
     findings.push(...loadSupabaseExport(args.supabaseJson));
-    scanned.push('Live Supabase audit export (--supabase)');
+    scanned.push(
+      coverage(
+        'Live Supabase audit export (--supabase)',
+        'Export de auditoría de Supabase (--supabase)',
+      ),
+    );
   }
 
-  finish(dir, findings, null, scanned, args);
+  // A folder scan touches no network and no live data at all, whatever flags were passed.
+  finish(dir, findings, null, scanned, { ...args, active: false });
 }

@@ -1,3 +1,5 @@
+import { coverage } from '../core/i18n.js';
+import type { CoverageLine } from '../core/i18n.js';
 import type { Finding, VibewardIntent } from '../core/types.js';
 import type { SiteFiles, BrokenAsset } from '../http/crawl.js';
 import type { ConsoleError } from './console.js';
@@ -82,7 +84,13 @@ export interface StackFingerprint {
   platformDomain: string | null;
   framework: string | null;
   clientRendered: boolean;
+  /** The signals that fired, in English. `localizeFingerprint` swaps these for `signalsEs`. */
   signals: string[];
+  /**
+   * The same signals in Spanish, dropped by `localizeFingerprint` once one of the two has
+   * been chosen — a report and a payload never carry both.
+   */
+  signalsEs?: string[];
   score: number;
   total: number;
 }
@@ -259,27 +267,44 @@ export function fingerprintStack(
   const hasScriptSrc = tagsOf(doc, 'script').some((t) => attr(t, 'src') !== null);
   const clientRendered = page.bodyTextLength < EMPTY_HTML_CHARS && hasScriptSrc;
 
-  const signals: string[] = [];
-  if (platformDomain) signals.push(`Still on the default *.${platformDomain} domain`);
-  if (clientRendered) signals.push('HTML carries no content — JavaScript renders everything');
-  if (!page.title) signals.push('No <title>');
-  if (!page.metaDescription) signals.push('No meta description');
-  if (!page.ogTitle && !page.ogImage) signals.push('No Open Graph tags');
-  if (!page.canonical) signals.push('No canonical URL');
-  if (page.jsonLdBlocks === 0) signals.push('No structured data');
-  if (files && !files.sitemapXml) signals.push('No sitemap.xml');
-  if (!page.faviconLink && !(files?.faviconOk ?? false)) signals.push('No favicon');
-  if (!page.lang) signals.push('No lang on <html>');
-  if (files && !files.llmsTxt) signals.push('No llms.txt');
-  if (jsBytes > HEAVY_BUNDLE_BYTES) signals.push(`JavaScript over 1 MB (${formatBytes(jsBytes)})`);
+  const found: CoverageLine[] = [];
+  const signal = (on: boolean, en: string, es: string): void => {
+    if (on) found.push(coverage(en, es));
+  };
+
+  signal(
+    Boolean(platformDomain),
+    `Still on the default *.${platformDomain} domain`,
+    `Todavía en el dominio *.${platformDomain} por defecto`,
+  );
+  signal(
+    clientRendered,
+    'HTML carries no content — JavaScript renders everything',
+    'El HTML no trae contenido — JavaScript lo renderiza todo',
+  );
+  signal(!page.title, 'No <title>', 'Sin <title>');
+  signal(!page.metaDescription, 'No meta description', 'Sin meta description');
+  signal(!page.ogTitle && !page.ogImage, 'No Open Graph tags', 'Sin etiquetas Open Graph');
+  signal(!page.canonical, 'No canonical URL', 'Sin URL canónica');
+  signal(page.jsonLdBlocks === 0, 'No structured data', 'Sin datos estructurados');
+  signal(Boolean(files && !files.sitemapXml), 'No sitemap.xml', 'Sin sitemap.xml');
+  signal(!page.faviconLink && !(files?.faviconOk ?? false), 'No favicon', 'Sin favicon');
+  signal(!page.lang, 'No lang on <html>', 'Sin lang en <html>');
+  signal(Boolean(files && !files.llmsTxt), 'No llms.txt', 'Sin llms.txt');
+  signal(
+    jsBytes > HEAVY_BUNDLE_BYTES,
+    `JavaScript over 1 MB (${formatBytes(jsBytes)})`,
+    `JavaScript por encima de 1 MB (${formatBytes(jsBytes)})`,
+  );
 
   return {
     host,
     platformDomain,
     framework: detectFramework(doc),
     clientRendered,
-    signals,
-    score: signals.length,
+    signals: found.map((l) => l.en),
+    signalsEs: found.map((l) => l.es),
+    score: found.length,
     total: FINGERPRINT_TOTAL,
   };
 }
@@ -342,6 +367,59 @@ function blocksEverything(rules: RobotsRule[]): boolean {
   return !rules.some((r) => r.allow && r.path.trim().startsWith('/'));
 }
 
+/**
+ * Blocks that a CDN injects into robots.txt on the way out, wrapped in its own markers.
+ *
+ * These matter because the remediation is a different action in a different place. Cloudflare
+ * turned its managed AI-crawler block on for a very large number of zones, so the file the
+ * owner opens in their repo either does not contain the rule or is not the copy being served,
+ * and "delete the Disallow line" sends them looking for something that is not there.
+ */
+const MANAGED_ROBOTS: { vendor: string; begin: RegExp; end: RegExp; where: string }[] = [
+  {
+    vendor: 'Cloudflare',
+    begin: /^#\s*BEGIN\s+Cloudflare\s+Managed\s+content/i,
+    end: /^#\s*END\s+Cloudflare\s+Managed\s+content/i,
+    where:
+      "the Cloudflare dashboard for this zone, under AI Crawl Control / the managed robots.txt setting — not in the site's own `robots.txt`",
+  },
+];
+
+/** A vendor-injected robots.txt block and the agents declared inside it. */
+export interface ManagedRobots {
+  vendor: string;
+  /** Where the owner has to go to change it, in prose. */
+  where: string;
+  /** Lower-cased `User-agent` values declared between the markers. */
+  agents: Set<string>;
+}
+
+/** The vendor block in a robots.txt, if the file carries one. */
+function detectManagedRobots(text: string): ManagedRobots | null {
+  for (const m of MANAGED_ROBOTS) {
+    let inside = false;
+    let found = false;
+    const agents = new Set<string>();
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (m.begin.test(line)) {
+        inside = true;
+        found = true;
+        continue;
+      }
+      if (m.end.test(line)) {
+        inside = false;
+        continue;
+      }
+      if (!inside) continue;
+      const ua = /^user-agent\s*:\s*(.+)$/i.exec(line);
+      if (ua) agents.add(ua[1]!.trim().toLowerCase());
+    }
+    if (found) return { vendor: m.vendor, where: m.where, agents };
+  }
+  return null;
+}
+
 export interface RobotsVerdict {
   /** The watched AI crawlers this file actually shuts out. */
   bots: string[];
@@ -349,6 +427,11 @@ export interface RobotsVerdict {
   viaWildcard: boolean;
   /** The `User-agent` values whose group carries the offending `Disallow`. */
   blockingAgents: string[];
+  /**
+   * The vendor block, when one exists and at least one blocking agent is declared inside it.
+   * `covers: 'all'` means editing the repo's file changes nothing at all.
+   */
+  managed: { vendor: string; where: string; covers: 'all' | 'some' } | null;
 }
 
 /** The watched AI crawlers that this robots.txt actually shuts out. */
@@ -364,7 +447,12 @@ export function robotsBlocksAI(robotsTxt: string | null): string[] {
  * fix rewrites rules the owner does want.
  */
 export function analyzeRobots(robotsTxt: string | null): RobotsVerdict {
-  const empty: RobotsVerdict = { bots: [], viaWildcard: false, blockingAgents: [] };
+  const empty: RobotsVerdict = {
+    bots: [],
+    viaWildcard: false,
+    blockingAgents: [],
+    managed: null,
+  };
   if (!robotsTxt) return empty;
   // A soft 404 (the SPA's index.html served for /robots.txt) is not a robots policy.
   if (/^\s*(<!doctype|<html)/i.test(robotsTxt)) return empty;
@@ -391,7 +479,27 @@ export function analyzeRobots(robotsTxt: string | null): RobotsVerdict {
   const blockingAgents = [...named];
   if (wildcardBlocks && bots.length > named.size) blockingAgents.push('*');
 
-  return { bots, viaWildcard: wildcardBlocks && bots.length > named.size, blockingAgents };
+  // Only a vendor block that actually contains part of the ban changes the remediation. A
+  // managed section that carries unrelated rules is none of this finding's business.
+  const vendor = detectManagedRobots(robotsTxt);
+  let managed: RobotsVerdict['managed'] = null;
+  if (vendor && blockingAgents.length > 0) {
+    const insideCount = blockingAgents.filter((a) => vendor.agents.has(a.toLowerCase())).length;
+    if (insideCount > 0) {
+      managed = {
+        vendor: vendor.vendor,
+        where: vendor.where,
+        covers: insideCount === blockingAgents.length ? 'all' : 'some',
+      };
+    }
+  }
+
+  return {
+    bots,
+    viaWildcard: wildcardBlocks && bots.length > named.size,
+    blockingAgents,
+    managed,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -404,27 +512,105 @@ export function analyzeRobots(robotsTxt: string | null): RobotsVerdict {
  * the line an owner acts on, and a report of nothing but problems reads as noise.
  * Keep in sync with the ids emitted below.
  */
-export const WEB_CHECKS: { id: string; label: string }[] = [
-  { id: 'web_robots_blocks_ai', label: 'robots.txt lets AI crawlers in' },
-  { id: 'web_ai_block_incomplete', label: 'AI crawlers blocked as declared' },
-  { id: 'web_empty_html', label: 'HTML carries real content' },
-  { id: 'web_broken_assets', label: 'No broken assets' },
-  { id: 'web_console_errors', label: 'No JavaScript errors on load' },
-  { id: 'web_duplicate_titles', label: 'Each page has its own <title>' },
-  { id: 'web_missing_title', label: '<title> present' },
-  { id: 'web_missing_meta_description', label: 'Meta description' },
-  { id: 'web_missing_og', label: 'Open Graph tags' },
-  { id: 'web_missing_canonical', label: 'Canonical URL' },
-  { id: 'web_missing_structured_data', label: 'Structured data (JSON-LD)' },
-  { id: 'web_h1_structure', label: 'Exactly one <h1> per page' },
-  { id: 'web_missing_sitemap', label: 'sitemap.xml' },
-  { id: 'web_missing_llms_txt', label: 'llms.txt' },
-  { id: 'web_missing_lang', label: 'lang attribute on <html>' },
-  { id: 'web_missing_alt', label: 'Images have alt text' },
-  { id: 'web_missing_404', label: 'Unknown URLs return 404' },
-  { id: 'web_missing_favicon', label: 'Favicon' },
-  { id: 'web_heavy_bundle', label: 'JavaScript under 1 MB' },
+export const WEB_CHECKS: { id: string; label: string; es: string }[] = [
+  {
+    id: 'web_robots_blocks_ai',
+    label: 'robots.txt lets AI crawlers in',
+    es: 'robots.txt deja entrar a los rastreadores de IA',
+  },
+  {
+    id: 'web_ai_block_incomplete',
+    label: 'AI crawlers blocked as declared',
+    es: 'Rastreadores de IA bloqueados como se declaró',
+  },
+  { id: 'web_empty_html', label: 'HTML carries real content', es: 'El HTML trae contenido real' },
+  { id: 'web_broken_assets', label: 'No broken assets', es: 'Sin recursos rotos' },
+  {
+    id: 'web_console_errors',
+    label: 'No JavaScript errors on load',
+    es: 'Sin errores de JavaScript al cargar',
+  },
+  {
+    id: 'web_duplicate_titles',
+    label: 'Each page has its own <title>',
+    es: 'Cada página tiene su propio <title>',
+  },
+  { id: 'web_missing_title', label: '<title> present', es: '<title> presente' },
+  { id: 'web_missing_meta_description', label: 'Meta description', es: 'Meta description' },
+  { id: 'web_missing_og', label: 'Open Graph tags', es: 'Etiquetas Open Graph' },
+  { id: 'web_missing_canonical', label: 'Canonical URL', es: 'URL canónica' },
+  {
+    id: 'web_missing_structured_data',
+    label: 'Structured data (JSON-LD)',
+    es: 'Datos estructurados (JSON-LD)',
+  },
+  {
+    id: 'web_h1_structure',
+    label: 'Exactly one <h1> per page',
+    es: 'Exactamente un <h1> por página',
+  },
+  { id: 'web_missing_sitemap', label: 'sitemap.xml', es: 'sitemap.xml' },
+  { id: 'web_missing_llms_txt', label: 'llms.txt', es: 'llms.txt' },
+  {
+    id: 'web_missing_lang',
+    label: 'lang attribute on <html>',
+    es: 'Atributo lang en <html>',
+  },
+  { id: 'web_missing_alt', label: 'Images have alt text', es: 'Las imágenes tienen texto alt' },
+  {
+    id: 'web_missing_404',
+    label: 'Unknown URLs return 404',
+    es: 'Las URLs inexistentes devuelven 404',
+  },
+  { id: 'web_missing_favicon', label: 'Favicon', es: 'Favicon' },
+  { id: 'web_heavy_bundle', label: 'JavaScript under 1 MB', es: 'JavaScript por debajo de 1 MB' },
 ];
+
+/**
+ * Checks this crawl had no way to evaluate, each with the reason, keyed by check id.
+ *
+ * A check that could not fail on the input it was given has not passed. "Every page has its
+ * own title ✅" on a crawl that reached one page is a fact about arithmetic, not about the
+ * site, and it lands in the report next to genuine passes and inside the "12 of 17 passed"
+ * count — which is how a report ends up sounding more thorough than the scan was. These are
+ * reported as not evaluated instead, on the same footing as the console check with no
+ * browser behind it.
+ *
+ * Deliberately separate from the config's `notApplicable`, which is the owner declaring a
+ * check irrelevant. This one is vibeward declaring its own coverage.
+ */
+export function webChecksNotEvaluated(input: {
+  pages: PageSignals[];
+  assetsChecked: number;
+}): Map<string, CoverageLine> {
+  const { pages, assetsChecked } = input;
+  const reasons = new Map<string, CoverageLine>();
+  const n = pages.length;
+
+  if (n < 2) {
+    reasons.set(
+      'web_duplicate_titles',
+      coverage(
+        `only ${n} page crawled — needs at least 2`,
+        `solo se rastreó ${n} página — hacen falta 2`,
+      ),
+    );
+  }
+  if (pages.reduce((total, p) => total + p.imgTotal, 0) === 0) {
+    reasons.set(
+      'web_missing_alt',
+      coverage('no <img> found on the crawled pages', 'no se encontró ningún <img> en las páginas'),
+    );
+  }
+  if (assetsChecked === 0) {
+    reasons.set(
+      'web_broken_assets',
+      coverage('no referenced assets to request', 'no había recursos referenciados que pedir'),
+    );
+  }
+
+  return reasons;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -434,6 +620,10 @@ function formatBytes(bytes: number): string {
 
 function ofPages(n: number, total: number): string {
   return `${n} of ${total} page${total === 1 ? '' : 's'}`;
+}
+
+function ofPagesEs(n: number, total: number): string {
+  return `${n} de ${total} página${total === 1 ? '' : 's'}`;
 }
 
 function urlsOf(pages: PageSignals[]): string[] {
@@ -458,8 +648,11 @@ export function checkWeb(input: {
   consoleErrors: ConsoleError[] | null;
   /** What the owner declared in vibeward.json, if anything. */
   intent?: VibewardIntent;
-  /** Check ids that do not apply to this site. Never evaluated, never reported as ok. */
-  notApplicable?: Map<string, string>;
+  /**
+   * Check ids that do not apply to this site. Never evaluated, never reported as ok. Only
+   * the keys matter here — the reason is the report's business, not the checker's.
+   */
+  notApplicable?: Map<string, unknown>;
 }): Finding[] {
   const { pages, files, brokenAssets, jsBytes, consoleErrors, intent, notApplicable } = input;
   const findings: Finding[] = [];
@@ -479,6 +672,13 @@ export function checkWeb(input: {
     if (open.length > 0) {
       findings.push({
         id: 'web_ai_block_incomplete',
+        es: {
+          label: 'Los rastreadores de IA no están bloqueados tan a fondo como se declaró',
+          evidence: `vibeward.json declara \`intent.aiCrawlers: "blocked"\`, pero ${open.length} de los ${AI_BOTS.length} rastreadores de IA vigilados siguen permitidos: ${open.join(', ')}.`,
+          impact:
+            'Los rastreadores que quedaron fuera de la lista están leyendo y reutilizando el contenido, que es exactamente lo que el sitio quería evitar — y nadie se va a enterar, porque la intención se dejó por escrito y nunca se verificó.',
+          why: `Un bloqueo parcial es lo peor de los dos mundos: ni la visibilidad de estar abierto, ni la protección de estar cerrado. Completarlo es un par \`User-agent\` / \`Disallow: /\` en \`public/robots.txt\` por cada agente que siga permitido. Conviene saberlo antes de confiar en ello: robots.txt es una petición, no un muro — a los rastreadores que deciden ignorarlo hay que pararlos en el CDN o en el servidor.`,
+        },
         label: 'AI crawlers are not blocked as thoroughly as declared',
         severity: 'medium',
         kind: 'web',
@@ -494,23 +694,38 @@ export function checkWeb(input: {
   }
 
   if (blockedBots.length > 0) {
-    const { viaWildcard, blockingAgents } = robots;
+    const { viaWildcard, blockingAgents, managed } = robots;
     const where = blockingAgents.map((a) => `\`User-agent: ${a}\``).join(', ');
+    const groups = blockingAgents.length === 1 ? 'that group' : 'those groups';
+
+    // Where the rule actually lives decides what the reader is told to do, and getting it
+    // wrong costs them the afternoon. Whoever edits a hand-written file must delete one
+    // line, not the file: replacing robots.txt wholesale also deletes the Disallow rules the
+    // owner does want (/admin, /checkout, staging) as a silent side effect of an SEO change.
+    // Whoever is on a CDN that injects the block must not edit the file at all — their copy
+    // is not the copy being served.
+    const byHand = `It is undone by deleting only the \`Disallow: /\` line inside ${groups} — every other line in the file is doing a job and must stay.`;
+    const byVendor = (m: NonNullable<RobotsVerdict['managed']>): string =>
+      `${m.covers === 'all' ? "The rule is not written in the site's own `robots.txt`" : "Part of the rule is not written in the site's own `robots.txt`"}: it sits inside a block ${m.vendor} injects into the response, between its \`# BEGIN\` and \`# END\` markers. Editing the file in the repository changes nothing, because that is not the copy being served — it is switched off in ${m.where}.${m.covers === 'some' ? ` The remaining agents are declared outside the managed block and ${byHand.charAt(0).toLowerCase()}${byHand.slice(1)}` : ''}`;
+
     findings.push({
       id: 'web_robots_blocks_ai',
       label: 'robots.txt blocks AI crawlers',
       severity: 'high',
       kind: 'web',
       source: `${origin}/robots.txt`,
-      evidence: `robots.txt carries an effective \`Disallow: /\` under ${where}, which shuts out ${blockedBots.length} AI crawler${blockedBots.length === 1 ? '' : 's'}: ${blockedBots.join(', ')}.`,
+      evidence: `robots.txt carries an effective \`Disallow: /\` under ${where}, which shuts out ${blockedBots.length} AI crawler${blockedBots.length === 1 ? '' : 's'}: ${blockedBots.join(', ')}.${
+        managed
+          ? ` ${managed.covers === 'all' ? 'Every blocking group is' : 'Some of those groups are'} inside a \`${managed.vendor}\` managed block.`
+          : ''
+      }`,
       impact:
         'The site cannot be read by the assistants people now ask instead of Google, so it can never be cited, summarised or recommended in an AI answer. That referral channel is closed at the door.',
-      // Deliberately precise about scope. Whoever acts on this must delete one line, not the
-      // file: replacing robots.txt wholesale also deletes the Disallow rules the owner does
-      // want (/admin, /checkout, staging) as a silent side effect of an SEO change.
-      why: `Blocking these agents removes the site from ChatGPT, Claude, Perplexity and Google AI answers. It is one line in a text file, and it is usually there by copy-paste, not by decision. It is undone by deleting only the \`Disallow: /\` line inside ${
-        blockingAgents.length === 1 ? 'that group' : 'those groups'
-      } — every other line in the file is doing a job and must stay.${
+      why: `Blocking these agents removes the site from ChatGPT, Claude, Perplexity and Google AI answers. ${
+        managed
+          ? `It is rarely a decision — ${managed.vendor} switches this on for whole zones by default. `
+          : 'It is one line in a text file, and it is usually there by copy-paste, not by decision. '
+      }${managed ? byVendor(managed) : byHand}${
         viaWildcard
           ? ' If some paths really are meant to be private, name them (`Disallow: /admin`) instead of using a bare `/`.'
           : ' An empty `Disallow:` is equivalent to allowing everything.'
@@ -520,6 +735,33 @@ export function checkWeb(input: {
         'https://www.rfc-editor.org/rfc/rfc9309',
       ],
       meta: { count: blockedBots.length },
+      es: {
+        label: 'robots.txt bloquea a los rastreadores de IA',
+        evidence: `robots.txt aplica un \`Disallow: /\` efectivo bajo ${where}, que deja fuera a ${blockedBots.length} rastreador${blockedBots.length === 1 ? '' : 'es'} de IA: ${blockedBots.join(', ')}.${
+          managed
+            ? ` ${managed.covers === 'all' ? 'Todos esos grupos están' : 'Algunos de esos grupos están'} dentro de un bloque gestionado por \`${managed.vendor}\`.`
+            : ''
+        }`,
+        impact:
+          'El sitio no puede ser leído por los asistentes a los que la gente pregunta hoy en lugar de a Google, así que nunca podrá ser citado, resumido ni recomendado en una respuesta de IA. Ese canal de tráfico queda cerrado en la puerta.',
+        why: `Bloquear a estos agentes saca al sitio de las respuestas de ChatGPT, Claude, Perplexity y Google AI. ${
+          managed
+            ? `Rara vez es una decisión: ${managed.vendor} lo activa por defecto en zonas enteras. ${
+                managed.covers === 'all'
+                  ? 'La regla no está escrita en el `robots.txt` del sitio'
+                  : 'Parte de la regla no está escrita en el `robots.txt` del sitio'
+              }: vive dentro de un bloque que ${managed.vendor} inyecta en la respuesta, entre sus marcadores \`# BEGIN\` y \`# END\`. Editar el fichero del repositorio no cambia nada, porque esa no es la copia que se está sirviendo — se desactiva en el panel de ${managed.vendor} de esta zona, en AI Crawl Control / el ajuste de robots.txt gestionado.${
+                managed.covers === 'some'
+                  ? ` Los agentes restantes sí están declarados fuera del bloque gestionado, y esos se arreglan borrando solo la línea \`Disallow: /\` de ${blockingAgents.length === 1 ? 'ese grupo' : 'esos grupos'}.`
+                  : ''
+              }`
+            : `Es una línea en un fichero de texto, y casi siempre está ahí por copiar y pegar, no por decisión. Se deshace borrando solo la línea \`Disallow: /\` dentro de ${blockingAgents.length === 1 ? 'ese grupo' : 'esos grupos'} — el resto de líneas del fichero está haciendo su trabajo y debe quedarse.`
+        }${
+          viaWildcard
+            ? ' Si de verdad hay rutas privadas, nómbralas (`Disallow: /admin`) en vez de usar un `/` a secas.'
+            : ' Un `Disallow:` vacío equivale a permitirlo todo.'
+        }`,
+      },
     });
   }
 
@@ -527,6 +769,13 @@ export function checkWeb(input: {
   if (home && home.bodyTextLength < EMPTY_HTML_CHARS) {
     findings.push({
       id: 'web_empty_html',
+      es: {
+        label: 'El HTML se sirve sin contenido',
+        evidence: `La página de inicio devuelve ${home.bodyTextLength} caracteres de texto visible antes de que se ejecute JavaScript (${ofPagesEs(emptyPages.length, total)} por debajo de ${EMPTY_HTML_CHARS} caracteres).`,
+        impact:
+          'Para todo lo que no ejecuta JavaScript el sitio es una página en blanco: sin titular, sin texto, sin nada que indexar ni citar. La mayoría de rastreadores de IA no ejecutan scripts, así que para ellos el sitio sencillamente no existe.',
+        why: 'Un shell renderizado en el cliente le entrega al rastreador un <div> vacío. Google renderiza tarde y de forma inconsistente; GPTBot, ClaudeBot y PerplexityBot no renderizan en absoluto. Cerrarlo es una decisión de arquitectura, no una edición de texto: o el titular y el primer párrafo reales viven dentro del nodo de montaje en `index.html` para estar en el fuente antes de que corra ningún script, o las páginas las genera un renderizador que emite HTML (Astro, React Server Components de Next.js, SSG de Vite).',
+      },
       label: 'The HTML ships with no content',
       severity: 'high',
       kind: 'web',
@@ -543,6 +792,19 @@ export function checkWeb(input: {
     const listed = brokenAssets.slice(0, 10);
     findings.push({
       id: 'web_broken_assets',
+      es: {
+        label: 'Recursos referenciados por el sitio devuelven error',
+        evidence: `${brokenAssets.length} fichero(s) referenciado(s) responden con 4xx/5xx — ${listed
+          .map((a) => `${a.url} → ${a.status} (referenciado desde ${a.from})`)
+          .join(' · ')}${
+          brokenAssets.length > listed.length
+            ? ` · …y ${brokenAssets.length - listed.length} más`
+            : ''
+        }`,
+        impact:
+          'El visitante ve imágenes que faltan, secciones sin estilo o una función que nunca carga — la forma más rápida de parecer abandonado y perder la venta en la primera pantalla.',
+        why: 'La página apunta a ficheros que no están desplegados: una ruta que solo existe en local, un recurso renombrado o una imagen que el build nunca copió. Los recursos que se sirven desde la raíz tienen que vivir en `public/` (Vite, Next.js, Astro) o en `static/` (SvelteKit) para que el build los copie — si no, la referencia sobra.',
+      },
       label: 'Assets referenced by the site return an error',
       severity: 'high',
       kind: 'web',
@@ -566,6 +828,19 @@ export function checkWeb(input: {
     const listed = consoleErrors.slice(0, 5);
     findings.push({
       id: 'web_console_errors',
+      es: {
+        label: 'La página lanza errores de JavaScript en el navegador',
+        evidence: `${consoleErrors.length} error(es) de consola al cargar — ${listed
+          .map((e) => `[${e.type}] ${e.text.slice(0, 300)}`)
+          .join(' · ')}${
+          consoleErrors.length > listed.length
+            ? ` · …y ${consoleErrors.length - listed.length} más`
+            : ''
+        }`,
+        impact:
+          'Algo de la página ya está roto para todos los visitantes — un formulario que no envía, una sección que no aparece. Lo que sea que el error interrumpe, el usuario nunca lo completa.',
+        why: 'Una excepción no capturada detiene el resto de ese script. Los errores en la primera carga no son cosméticos: casi siempre significan que una función está muerta. Reproducirlos con las DevTools abiertas en la pestaña Console es lo que convierte el mensaje de arriba en la línea de código que falló.',
+      },
       label: 'The page throws JavaScript errors in the browser',
       severity: 'high',
       kind: 'web',
@@ -590,6 +865,13 @@ export function checkWeb(input: {
   if (total >= 2 && firstTitle && pages.every((p) => p.title === firstTitle)) {
     findings.push({
       id: 'web_duplicate_titles',
+      es: {
+        label: 'Todas las páginas tienen el mismo <title>',
+        evidence: `Las ${total} páginas rastreadas envían el mismo título: "${firstTitle}".`,
+        impact:
+          'Todas las páginas compiten por el mismo resultado de búsqueda y no gana ninguna. El título es la línea azul que la gente pulsa en Google y la etiqueta de cada pestaña y marcador compartido.',
+        why: 'Los buscadores tratan los títulos idénticos como páginas duplicadas: eligen una y descartan el resto. La causa habitual es un router de SPA que nunca actualiza el título. Cada página necesita su propio `<title>` de unos 50-60 caracteres, con el asunto de la página delante y la marca al final ("Precios — Acme"); en una SPA de React sin meta-framework eso significa fijar `document.title` en cada ruta.',
+      },
       label: 'Every page has the same <title>',
       severity: 'high',
       kind: 'web',
@@ -605,6 +887,13 @@ export function checkWeb(input: {
   if (home && !home.title) {
     findings.push({
       id: 'web_missing_title',
+      es: {
+        label: 'La página de inicio no tiene <title>',
+        evidence: `${ofPagesEs(noTitle.length, total)} no tienen etiqueta <title>, incluida la página de inicio.`,
+        impact:
+          'Google imprime la URL o una frase inventada como titular del resultado de búsqueda, y la pestaña del navegador muestra el dominio pelado. Es el texto más visible que posee el sitio.',
+        why: 'El <title> es el titular de cada resultado de búsqueda, de cada enlace compartido y de cada marcador. Sin él no hay nada que pulsar. Cada página necesita uno en su `<head>`, diciendo a qué se dedica el negocio en vez de repetir solo la marca.',
+      },
       label: 'The home page has no <title>',
       severity: 'high',
       kind: 'web',
@@ -621,6 +910,13 @@ export function checkWeb(input: {
   if (noDescription.length > 0) {
     findings.push({
       id: 'web_missing_meta_description',
+      es: {
+        label: 'Hay páginas sin meta description',
+        evidence: `${ofPagesEs(noDescription.length, total)} no tienen <meta name="description">.`,
+        impact:
+          'Google rellena las dos líneas de debajo del enlace con el texto que rasque de la página, así que el argumento que lee un visitante antes de decidir si pulsa lo escribe un algoritmo en lugar del dueño.',
+        why: 'La description es el texto publicitario del resultado de búsqueda. No cambia el posicionamiento, cambia el porcentaje de clics. Una por página, de 150-160 caracteres, escrita para una persona que está decidiendo si pulsa — una genérica es peor que ninguna, porque parece escrita y así nadie escribe nunca la de verdad.',
+      },
       label: 'Pages have no meta description',
       severity: 'medium',
       kind: 'web',
@@ -636,6 +932,13 @@ export function checkWeb(input: {
   if (noOg.length > 0) {
     findings.push({
       id: 'web_missing_og',
+      es: {
+        label: 'Hay páginas sin etiquetas Open Graph',
+        evidence: `A ${ofPagesEs(noOg.length, total)} les falta og:title u og:image.`,
+        impact:
+          'Compartido por WhatsApp, LinkedIn, Slack o X, el enlace aparece como una URL pelada sin imagen ni título, y la gente pasa de largo. Cada vez que alguien comparte el sitio, se desperdicia.',
+        why: 'Las etiquetas Open Graph son lo que leen las redes sociales y las apps de mensajería para construir la tarjeta de vista previa. Sin ellas no hay tarjeta. El juego completo en el `<head>` de cada página es og:title, og:description, og:image, og:url y og:type, más `twitter:card` en `summary_large_image` — y og:image tiene que ser una imagen real de 1200x630, porque si falta se renderiza un recuadro en blanco en lugar de ninguna tarjeta.',
+      },
       label: 'Pages have no Open Graph tags',
       severity: 'medium',
       kind: 'web',
@@ -652,6 +955,13 @@ export function checkWeb(input: {
   if (noCanonical.length > 0) {
     findings.push({
       id: 'web_missing_canonical',
+      es: {
+        label: 'Hay páginas que no declaran URL canónica',
+        evidence: `${ofPagesEs(noCanonical.length, total)} no tienen <link rel="canonical">.`,
+        impact:
+          'La misma página accesible con y sin www, con y sin barra final, o con un parámetro de campaña, cuenta como varias páginas que compiten entre sí, y reparte entre ellas la autoridad que el sitio se ha ganado.',
+        why: `La etiqueta canonical nombra la única dirección real de una página para que los duplicados se consoliden en ella en vez de competir con ella. Cada página necesita su propio \`<link rel="canonical">\` apuntando a su propia URL absoluta (\`${origin}/precios\` en la página de precios) — apuntar todas las páginas a la de inicio es el error habitual, y le dice a los buscadores que el resto del sitio no existe.`,
+      },
       label: 'Pages declare no canonical URL',
       severity: 'medium',
       kind: 'web',
@@ -670,6 +980,13 @@ export function checkWeb(input: {
   if (noJsonLd.length > 0) {
     findings.push({
       id: 'web_missing_structured_data',
+      es: {
+        label: 'Sin datos estructurados (JSON-LD)',
+        evidence: `${ofPagesEs(noJsonLd.length, total)} no contienen ningún bloque <script type="application/ld+json">.`,
+        impact:
+          'Los buscadores y los asistentes tienen que adivinar qué es el negocio, qué vende y dónde está. Los resultados enriquecidos (valoraciones, precios, FAQ, horarios) no están disponibles para un sitio que nunca los declara.',
+        why: 'Los datos estructurados son la versión legible por máquina de la página. Es como un asistente responde "quiénes son y qué hacen" con datos en vez de con suposiciones. Lo mínimo es un bloque `application/ld+json` en el `<head>` de la página de inicio declarando una `Organization` con el nombre real, url, logo, description y los enlaces `sameAs` a los perfiles — los valores tienen que ser ciertos, porque esto es el texto que un asistente repite tal cual.',
+      },
       label: 'No structured data (JSON-LD)',
       severity: 'medium',
       kind: 'web',
@@ -686,14 +1003,25 @@ export function checkWeb(input: {
   const manyH1 = pages.filter((p) => p.h1Count > 1);
   if (noH1.length > 0 || manyH1.length > 0) {
     const parts: string[] = [];
-    if (noH1.length > 0) parts.push(`${ofPages(noH1.length, total)} have no <h1>`);
+    const partsEs: string[] = [];
+    if (noH1.length > 0) {
+      parts.push(`${ofPages(noH1.length, total)} have no <h1>`);
+      partsEs.push(`${ofPagesEs(noH1.length, total)} no tienen <h1>`);
+    }
     if (manyH1.length > 0) {
-      parts.push(
-        `${ofPages(manyH1.length, total)} have more than one (up to ${Math.max(...manyH1.map((p) => p.h1Count))})`,
-      );
+      const most = Math.max(...manyH1.map((p) => p.h1Count));
+      parts.push(`${ofPages(manyH1.length, total)} have more than one (up to ${most})`);
+      partsEs.push(`${ofPagesEs(manyH1.length, total)} tienen más de uno (hasta ${most})`);
     }
     findings.push({
       id: 'web_h1_structure',
+      es: {
+        label: 'La estructura de encabezados está mal',
+        evidence: `${partsEs.join('; ')}.`,
+        impact:
+          'La única línea que le dice a un buscador, a un asistente y a un lector de pantalla de qué va la página falta o está repetida, así que la página queda archivada bajo el asunto equivocado o bajo ninguno.',
+        why: 'Exactamente un <h1> por página, con el asunto de esa página. Los de más suelen ser decisiones de estilo, no encabezados — se bajan a <h2> conservando el aspecto en una clase, en vez de borrarlos.',
+      },
       label: 'Heading structure is wrong',
       severity: 'medium',
       kind: 'web',
@@ -708,6 +1036,13 @@ export function checkWeb(input: {
   if (!files.sitemapXml) {
     findings.push({
       id: 'web_missing_sitemap',
+      es: {
+        label: 'Sin sitemap.xml',
+        evidence: `${origin}/sitemap.xml no se sirve.`,
+        impact:
+          'Las páginas que no están enlazadas desde la de inicio pueden pasar semanas sin que nadie las vea, o no indexarse nunca, y cada actualización tarda más en aparecer en las búsquedas.',
+        why: `Un sitemap es la lista de páginas que el dueño quiere que se indexen. Sin él, los rastreadores solo encuentran lo que se van topando. Es un \`urlset\` de entradas \`<loc>\` en \`public/sitemap.xml\` (\`static/sitemap.xml\` en SvelteKit), con una línea \`Sitemap: ${origin}/sitemap.xml\` en robots.txt que apunte a él${total > 0 ? ` — este escaneo alcanzó ${total} página${total === 1 ? '' : 's'}, listadas en "Páginas escaneadas"` : ''}.`,
+      },
       label: 'No sitemap.xml',
       severity: 'medium',
       kind: 'web',
@@ -723,6 +1058,13 @@ export function checkWeb(input: {
   if (!files.llmsTxt) {
     findings.push({
       id: 'web_missing_llms_txt',
+      es: {
+        label: 'Sin llms.txt',
+        evidence: `${origin}/llms.txt no se sirve.`,
+        impact:
+          'Cuando a un asistente le preguntan por este negocio, tiene que reconstruir la oferta con el marcado que consiga interpretar. Un fichero corto y bien escrito es la diferencia entre que lo describan bien y que lo describan mal.',
+        why: 'llms.txt es el resumen en texto plano que una IA lee primero: qué es el sitio, para quién es y qué páginas importan. Vive en `public/llms.txt` — un H1 con el nombre, una cita con una frase sobre la oferta y el público, y una lista `## Pages` con las páginas que merece la pena leer y una línea por cada una. Solo funciona si dice lo que el negocio vende de verdad; una versión de relleno es peor que ninguna, porque se lee como si fuera autoritativa.',
+      },
       label: 'No llms.txt',
       severity: 'medium',
       kind: 'web',
@@ -739,6 +1081,13 @@ export function checkWeb(input: {
   if (noLang.length > 0) {
     findings.push({
       id: 'web_missing_lang',
+      es: {
+        label: 'La etiqueta <html> no declara idioma',
+        evidence: `${ofPagesEs(noLang.length, total)} no tienen el atributo lang en <html>.`,
+        impact:
+          'Los navegadores ofrecen traducir una página que ya está en el idioma del visitante, los lectores de pantalla eligen la voz equivocada y los buscadores pueden servir el sitio al país que no toca.',
+        why: 'Un atributo — `lang` en `<html>` — le dice a cualquier cliente en qué idioma está escrito el contenido. Las plantillas vienen con él vacío o copiado del starter, así que hay que ponerlo en el idioma en el que está el texto de verdad, no en el que traía la plantilla.',
+      },
       label: 'The <html> tag declares no language',
       severity: 'medium',
       kind: 'web',
@@ -756,6 +1105,13 @@ export function checkWeb(input: {
     const affected = pages.filter((p) => p.imgWithoutAlt > 0);
     findings.push({
       id: 'web_missing_alt',
+      es: {
+        label: 'Hay imágenes sin texto alternativo',
+        evidence: `${imgWithoutAlt} de ${imgTotal} imágenes no tienen atributo alt, repartidas en ${ofPagesEs(affected.length, total)}.`,
+        impact:
+          'Los visitantes ciegos oyen "imagen" en lugar del producto, la búsqueda de imágenes no devuelve nunca estas fotos y, en varias jurisdicciones, es una obligación de accesibilidad y no un detalle.',
+        why: 'El texto alt es lo que una imagen le dice a quien —o a lo que— no puede verla: lectores de pantalla, búsqueda de imágenes y cualquier rastreador que indexe la página. Tiene que describir lo que la foto muestra de verdad, en el idioma de la página — lo que significa mirar cada imagen, no generar texto a partir del nombre del fichero. Las imágenes puramente decorativas llevan un `alt=""` vacío, que no es lo mismo que no llevar ninguno.',
+      },
       label: 'Images have no alt text',
       severity: 'medium',
       kind: 'web',
@@ -771,6 +1127,16 @@ export function checkWeb(input: {
   if (probe.status > 0 && (probe.status < 400 || !probe.distinct)) {
     findings.push({
       id: 'web_missing_404',
+      es: {
+        label: 'Las URLs inexistentes no devuelven un 404 real',
+        evidence:
+          probe.status < 400
+            ? `Una URL que no existe respondió ${probe.status} en lugar de 404${probe.distinct ? '' : ' y sirvió la página de inicio'}.`
+            : `El cuerpo de la respuesta 404 es la misma página que la de inicio.`,
+        impact:
+          'Los buscadores indexan infinitas URLs inexistentes como copias de la página de inicio, y quien se equivoque al teclear un enlace aterriza en algo que parece correcto pero no es la página que buscaba.',
+        why: 'Una SPA que sirve index.html para cualquier ruta nunca le dice a nadie que una URL está mal. La señal es el código de estado, no el diseño — una página que dice "no encontrado" mientras responde 200 no cuenta. Los hostings estáticos leen `public/404.html`, Next.js usa `app/not-found.tsx`, y una SPA de React necesita una ruta catch-all.',
+      },
       label: 'Unknown URLs do not return a real 404',
       severity: 'low',
       kind: 'web',
@@ -788,6 +1154,14 @@ export function checkWeb(input: {
   if (!files.faviconOk && !pages.some((p) => p.faviconLink)) {
     findings.push({
       id: 'web_missing_favicon',
+      es: {
+        label: 'Sin favicon',
+        evidence:
+          'No se sirve ningún favicon ni se declara <link rel="icon"> en ninguna página rastreada.',
+        impact:
+          'La pestaña, el marcador y la pantalla de inicio del móvil muestran una hoja en blanco. Es pequeño, es gratis de arreglar, y es la diferencia entre un negocio y una demo de fin de semana.',
+        why: 'El favicon es la única marca que le queda a un sitio en una fila de treinta pestañas abiertas. Necesita un `public/favicon.svg` más un `public/apple-touch-icon.png` de 180x180 para la pantalla de inicio del móvil, ambos referenciados con `<link rel="icon">` y `<link rel="apple-touch-icon">` en el `<head>`.',
+      },
       label: 'No favicon',
       severity: 'low',
       kind: 'web',
@@ -806,12 +1180,22 @@ export function checkWeb(input: {
   const inlinePage = pages.find((p) => p.inlineScriptBytes === inlineMax);
   const totalJs = jsBytes + inlineMax;
   if (totalJs > HEAVY_BUNDLE_BYTES) {
-    const inlineNote =
-      inlineMax > HEAVY_BUNDLE_BYTES / 2
-        ? ` ${formatBytes(inlineMax)} of that is inline \`<script>\` written straight into the HTML document, which cannot be cached and blocks the parser until it fully downloads.`
-        : '';
+    const heavyInline = inlineMax > HEAVY_BUNDLE_BYTES / 2;
+    const inlineNote = heavyInline
+      ? ` ${formatBytes(inlineMax)} of that is inline \`<script>\` written straight into the HTML document, which cannot be cached and blocks the parser until it fully downloads.`
+      : '';
+    const inlineNoteEs = heavyInline
+      ? ` ${formatBytes(inlineMax)} de eso es \`<script>\` en línea escrito directamente en el documento HTML, que no se puede cachear y bloquea el parser hasta que se descarga entero.`
+      : '';
     findings.push({
       id: 'web_heavy_bundle',
+      es: {
+        label: 'La carga de JavaScript es pesada',
+        evidence: `Se descargan ${formatBytes(totalJs)} de JavaScript sin comprimir para renderizar la página (umbral: 1.0 MB).${inlineNoteEs}`,
+        impact:
+          'En un móvil de gama media con datos móviles la página se queda en blanco varios segundos, y una parte importante de los visitantes se va antes de que pinte — nunca llegan a ver la oferta.',
+        why: `Todo lo que bloquea el primer render — bundles externos y script en línea por igual — retrasa la página por código al que el visitante quizá no llegue nunca. Qué parte tiene la culpa es una medición, no una suposición: \`vite-bundle-visualizer\` o \`source-map-explorer\` te dicen qué bundle es, y ${heavyInline ? 'un script en línea de varios megas suele ser datos o plantillas que deberían ir en un fichero aparte cacheable o en una respuesta del servidor' : 'lo habitual es cargar de forma diferida todo lo que no hace falta para el primer pintado'}.`,
+      },
       label: 'JavaScript payload is heavy',
       severity: 'low',
       kind: 'web',

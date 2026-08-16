@@ -30,9 +30,31 @@ export function extractFirebaseConfig(text: string): FirebaseConfig | null {
   return { projectId, databaseURL, storageBucket };
 }
 
+/**
+ * What a confirmation prompt should show before probing this config: the most specific
+ * address the probe will actually reach. Naming the project rather than the endpoints is how
+ * a prompt becomes something people click through instead of read.
+ */
+export function firebaseTarget(cfg: FirebaseConfig): string {
+  if (cfg.databaseURL) return cfg.databaseURL.replace(/\/$/, '');
+  if (cfg.projectId) return `https://${cfg.projectId}-default-rtdb.firebaseio.com`;
+  if (cfg.storageBucket) return `firebasestorage.googleapis.com/v0/b/${cfg.storageBucket}/o`;
+  return 'the project’s Firebase endpoints';
+}
+
 export function firebaseRtdbFinding(baseUrl: string, empty: boolean): Finding {
   return {
     id: 'firebase_rtdb_open',
+    es: {
+      label: `La Realtime Database de Firebase es legible sin autenticación${empty ? ' (ahora mismo vacía)' : ''}`,
+      evidence: empty
+        ? 'Una lectura superficial devolvió 200 sin error de permisos (la base está abierta pero ahora mismo vacía).'
+        : 'Una lectura superficial devolvió las claves de primer nivel sin autenticación.',
+      exploit: `Cualquiera pide \`${baseUrl}/.json\` y se descarga la base de datos entera — sin login. Añadiendo \`?shallow=true\` lista las claves; quitándolo, lo vuelca todo.`,
+      impact:
+        'Todos los registros de la Realtime Database son legibles (y, si las reglas de escritura también están abiertas, escribibles) por cualquiera en internet.',
+      why: 'Las reglas de seguridad permiten lectura pública. Sustituye `".read": true` por reglas ligadas a la autenticación (`auth != null` y propiedad por nodo).',
+    },
     label: `Firebase Realtime Database is readable without authentication${empty ? ' (currently empty)' : ''}`,
     severity: empty ? 'high' : 'critical',
     check: 6,
@@ -55,6 +77,14 @@ export function firebaseRtdbFinding(baseUrl: string, empty: boolean): Finding {
 export function firebaseStorageFinding(bucket: string): Finding {
   return {
     id: 'firebase_storage_open',
+    es: {
+      label: 'El bucket de Firebase Storage se puede listar públicamente',
+      evidence: 'El endpoint de listado de objetos devolvió 200 sin autenticación.',
+      exploit: `Cualquiera pide \`https://firebasestorage.googleapis.com/v0/b/${bucket}/o\` para enumerar todos los ficheros guardados y luego se descarga cada uno — el patrón de la brecha de Tea (documentos de identidad y selfies).`,
+      impact:
+        'Todos los ficheros subidos (que en apps hechas con vibe-coding suelen incluir fotos de documentos, recibos y subidas de usuarios) se pueden enumerar y descargar por cualquiera.',
+      why: 'Las reglas de Storage permiten el listado público. Restringe `allow read` a los propietarios autenticados y nunca dejes un bucket en modo de pruebas.',
+    },
     label: `Firebase Storage bucket is publicly listable`,
     severity: 'high',
     check: 6,

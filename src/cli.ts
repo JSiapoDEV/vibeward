@@ -35,6 +35,10 @@ function usage(): void {
     `${C.dim}      --config:  a vibeward.json (default: beside the target, then the cwd)${C.reset}`,
   );
   log(
+    `${C.dim}      --lang:    report language, en (default) or es — the CLI stays English${C.reset}`,
+  );
+  log(`${C.dim}      --out:     where to write the report (default: beside the cwd)${C.reset}`);
+  log(
     `  vibeward scan <folder> [--supabase export.json] [--sarif f]            white-box code scan`,
   );
   log(

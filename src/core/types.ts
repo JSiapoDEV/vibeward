@@ -10,6 +10,18 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low';
  */
 export type FindingKind = 'security' | 'web';
 
+/**
+ * The reader-facing prose of a finding in Spanish, overlaid on the English when the report
+ * is built with `--lang es`.
+ *
+ * Every field is optional and falls back to the English one, so a half-translated finding
+ * degrades into a mixed-language report rather than an empty section — but the contract test
+ * asserts the set is complete, because "it falls back" is how a translation quietly rots.
+ * The technical fields (`id`, `cwe`, `source`, `references`, `meta`) are never translated:
+ * they are identifiers and URLs, and an agent parsing `--stdout` keys off them.
+ */
+export type FindingES = Partial<Pick<Finding, 'label' | 'evidence' | 'exploit' | 'impact' | 'why'>>;
+
 export interface Finding {
   id: string;
   label: string;
@@ -42,6 +54,8 @@ export interface Finding {
   references?: string[];
   /** Structured context (the affected table, the pages involved, a count). */
   meta?: { table?: string; pages?: string[]; count?: number };
+  /** Spanish prose for `--lang es`. Missing fields fall back to the English above. */
+  es?: FindingES;
 }
 
 /** True for quality/visibility findings, which are reported apart from security ones. */
