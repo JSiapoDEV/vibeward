@@ -64,7 +64,7 @@ import type { Moment } from '../src/guard/verdict.js';
 
 const ALL_MOMENTS: Moment[] = ['prompt', 'action', 'content'];
 import { RELEASED, VERSION, ageInDays, stalenessNotice } from '../src/core/version.js';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -1411,6 +1411,17 @@ console.log('\n28. Staleness notice — a pinned copy that knows its own age');
     !/new(er)? version (is )?available/i.test(old),
     'claims only what it can know offline: its own age, not that an update exists',
   );
+
+  // VERSION lives in three places — package.json, this constant, and the plugin manifest
+  // that the build derives from package.json. They are hand-maintained in two of them, and
+  // a release tag is checked against package.json by publish-plugin.yml. A mismatch there
+  // fails the release at the worst possible moment: after the tag is already public.
+  {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+    };
+    assert(pkg.version === VERSION, `package.json ${pkg.version} matches VERSION ${VERSION}`);
+  }
 
   // The constant is hand-maintained next to VERSION. These catch the two ways that rots.
   assert(ageInDays() !== null, 'RELEASED in the shipped build actually parses');

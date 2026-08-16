@@ -14,9 +14,9 @@ name: publish-plugin
 # — a 300 KB bundle that changes every release would otherwise grow the history forever.
 #
 # The catalog that points at this branch is not in this repository: it lives in
-# `JSiapoDEV/plugins`, so that installing a plugin that is not vibeward never means adding the
+# `jsiapo-dev/plugins`, so that installing a plugin that is not vibeward never means adding the
 # vibeward repository. Nothing here changes when it gains an entry —
-# `claude plugin marketplace add JSiapoDEV/plugins`, then `claude plugin install vibeward`.
+# `claude plugin marketplace add jsiapo-dev/plugins`, then `claude plugin install vibeward`.
 
 on:
   push:

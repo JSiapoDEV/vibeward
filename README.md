@@ -293,7 +293,7 @@ for everyone else. `--warn` still works as an alias of the default for older `se
 ### Claude Code: as a plugin
 
 ```bash
-claude plugin marketplace add JSiapoDEV/plugins
+claude plugin marketplace add jsiapo-dev/plugins
 claude plugin install vibeward
 ```
 
