@@ -16,9 +16,9 @@ export const MARKER_END = '<!-- vibeward:end -->';
 /**
  * Everything a template needs to know about the machine it is being written on and what the
  * user asked for. The guard command is resolved once per run (see `binary.ts`) instead of
- * hardcoded, because what the hook should run depends on whether there is an installed
- * `vibeward` to run. The hook manifests themselves live in `hooks.ts` — seven native formats
- * do not belong in the file that holds the prose.
+ * hardcoded: it is normally a pinned `npx`, and the version in it changes with every release.
+ * The hook manifests themselves live in `hooks.ts` — seven native formats do not belong in the
+ * file that holds the prose.
  */
 export interface RenderContext {
   guardCommand: string;
@@ -77,16 +77,19 @@ export const INSTRUCTION = [
   '',
   '`--stdout` puts the JSON payload on stdout and every human-facing line on stderr, so',
   'stdout parses cleanly. `--out` writes the full formatted report as markdown — that file is',
-  'the deliverable for the human, and without the flag it is built and thrown away. `--yes`',
-  'skips the interactive authorization prompt — which is why `--passive` is the default',
-  'here: it reads only assets the site already serves to any visitor (bundles, headers,',
-  'public metadata) and probes no data.',
+  'the deliverable for the human, and without the flag it is built and thrown away.',
   '',
-  '**Do not drop `--passive` on your own.** The full scan sends requests a site owner has',
-  'not agreed to receive, so it needs the user to say, in this conversation, that they own',
-  'the target or were hired to audit it. A URL merely appearing in the conversation is not',
-  'authorization: if the user says "check out competitor.com", scan it passively or ask.',
-  'Re-run without `--passive` only after they confirm.',
+  'Most of a scan is a browser: the page, its bundles, the crawl, the headers, the',
+  'plain-HTTP address. None of that asks anything. vibeward stops and asks exactly once, and',
+  'only if it finds a Supabase or Firebase backend in the bundles, because reading rows out',
+  'of a data API is the part a visitor never does. `--yes` answers that question in advance,',
+  'and `--passive` skips those probes altogether — which is why `--passive` is the default here.',
+  '',
+  '**Do not pass `--yes` on your own.** It pre-authorizes reading live data out of somebody',
+  "else's database. It needs the user to say, in this conversation, that they own the target",
+  'or were hired to audit it. A URL merely appearing in the conversation is not authorization:',
+  'if the user says "check out competitor.com", scan it passively or ask. Re-run with `--yes`',
+  'only after they confirm.',
   '',
   '`vibeward-report.md` is a generated artifact. Mention where it is, and do not commit it',
   'unless the user asks.',

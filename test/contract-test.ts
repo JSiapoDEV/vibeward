@@ -12,6 +12,7 @@ import { checkHeaders } from '../src/checks/headers.js';
 import { analyzeSupabaseExport } from '../src/checks/supabase.js';
 import { parseConfig, applySuppressions } from '../src/core/config.js';
 import { INSTRUCTION, skillFile, claudeMdBlock, agentsBlock } from '../src/init/templates.js';
+import { localize } from '../src/core/i18n.js';
 import type { Finding } from '../src/core/types.js';
 import type { SiteFiles } from '../src/http/crawl.js';
 
@@ -90,6 +91,45 @@ console.log('\nContract — vibeward reports, it does not repair\n');
   );
 }
 
+console.log('\nContract — every finding can be read in Spanish\n');
+{
+  // The failure mode this exists to prevent is silent: `localize` falls back to English
+  // field by field, so a finding added without a translation produces a report that is
+  // Spanish everywhere except the paragraph the reader most needs. Nobody notices until a
+  // client does. Asserting it here makes an untranslated finding a red build instead.
+  const findings = everyFinding();
+
+  const untranslated = findings.filter((f) => !f.es);
+  assert(
+    untranslated.length === 0,
+    `every finding carries an es overlay${untranslated.length ? ` — ${[...new Set(untranslated.map((f) => f.id))].join(', ')}` : ''}`,
+  );
+
+  const noLabel = findings.filter((f) => f.es && !f.es.label);
+  assert(noLabel.length === 0, 'every overlay translates the label a reader sees first');
+
+  // `why` carries the remediation. A translation that omits it is the one that matters.
+  const shallow = findings.filter((f) => f.es && (f.es.why ?? '').length < 40);
+  assert(
+    shallow.length === 0,
+    `every overlay explains itself in Spanish${shallow.length ? ` — ${[...new Set(shallow.map((f) => f.id))].join(', ')}` : ''}`,
+  );
+
+  const copied = findings.filter((f) => f.es?.why && f.es.why === f.why);
+  assert(copied.length === 0, 'no overlay is the English text pasted into the Spanish slot');
+
+  // Applying it must produce a finding, not a finding plus a second copy of itself.
+  const applied = findings.map((f) => localize(f, 'es'));
+  assert(
+    applied.every((f) => !('es' in f)),
+    'localize removes the overlay it applied, so no output ships both languages',
+  );
+  assert(
+    applied.every((f, i) => f.id === findings[i]!.id && f.severity === findings[i]!.severity),
+    'and it translates prose only — ids and severities are identifiers, not copy',
+  );
+}
+
 console.log('\nContract — security cannot be silenced by a config file\n');
 {
   const parsed = parseConfig(
@@ -143,6 +183,23 @@ console.log('\nContract — the installed instructions say so\n');
       ),
     ),
     'the skill never references autofix except to say it does not exist',
+  );
+
+  // The gate moved: nothing is asked to read public assets, and the one question left is
+  // asked before reading rows out of a backend. `--yes` answers that question in advance, so
+  // it is the flag the installed instructions have to warn an agent about — the old text
+  // warned about `--passive`, which no longer guards anything an agent can get wrong.
+  assert(
+    /Do not pass `--yes` on your own/.test(INSTRUCTION),
+    'the skill tells the agent not to pre-authorize a data probe by itself',
+  );
+  assert(
+    /not authorization/i.test(INSTRUCTION),
+    'and that a URL appearing in the conversation is not permission',
+  );
+  assert(
+    !/skips the interactive authorization prompt/.test(INSTRUCTION),
+    'and it no longer describes a prompt that fires before anything is probed',
   );
 
   // Every generated artifact must be identifiable as ours, or a re-run cannot tell its own

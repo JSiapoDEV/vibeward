@@ -15,7 +15,7 @@ import type { Choice } from '../core/prompt.js';
 import { isInteractive, multiselect, select } from '../core/prompt.js';
 import { C, confirm, log } from '../core/terminal.js';
 import { stalenessNotice } from '../core/version.js';
-import { resolveGuard, upgradeGuardCommand } from './binary.js';
+import { resolveGuard, upgradeGuardCommand, vendorGuard } from './binary.js';
 import { guardHandlers } from './hooks.js';
 import type { RenderContext } from './templates.js';
 import { MARK, MARKER_END, MARKER_START } from './templates.js';
@@ -157,7 +157,7 @@ type MergeOutcome = 'added' | 'upgraded' | 'unchanged';
  * how you update and never how you accumulate. Entries that are not ours are never touched:
  * the filter only removes handlers whose command runs `vibeward … guard`.
  */
-function mergeHookSettings(
+export function mergeHookSettings(
   raw: string,
   rendered: Record<string, unknown>,
   guardCommand: string,
@@ -175,6 +175,17 @@ function mergeHookSettings(
   const block = asRecord(rendered.hooks) ?? {};
   const hooks = asRecord(settings.hooks) ?? {};
   let carriedLegacy = false;
+  /**
+   * Flags the user added to our command, carried across the rewrite.
+   *
+   * `upgradeGuardCommand` has always preserved them, but its result was read as a boolean and
+   * thrown away: our handlers were dropped and the freshly rendered ones appended, flags and
+   * all. That was survivable while a rewrite only happened to the rare legacy `@latest` hook.
+   * Now every re-run raises the pin, so discarding them would silently turn a `--block` guard
+   * back into a warning on the next update — enforcement quietly downgraded, in a file nobody
+   * re-reads, by the command whose job is to keep the guard current.
+   */
+  let carriedFlags = '';
 
   // Sibling keys the host requires alongside `hooks` — Cursor and Copilot both version their
   // manifest. Only ever filled in when absent: if the user pinned a different version, that is
@@ -194,12 +205,17 @@ function mergeHookSettings(
         kept.push(group);
         continue;
       }
-      // A hook written by an older vibeward runs `npx vibeward@latest guard`, which
-      // re-resolves against the registry on every turn. Noting it here is what tells the user
-      // their install is being migrated rather than merely rewritten.
+      // A hook written by an older vibeward runs an older pin, or — before pinning existed —
+      // `npx vibeward@latest guard`. Noting it here is what tells the user their install is
+      // being brought forward rather than merely rewritten.
       for (const handler of ours) {
-        if (upgradeGuardCommand(String(handler.command ?? handler.bash ?? ''), guardCommand)) {
+        const upgraded = upgradeGuardCommand(
+          String(handler.command ?? handler.bash ?? ''),
+          guardCommand,
+        );
+        if (upgraded) {
           carriedLegacy = true;
+          if (!carriedFlags) carriedFlags = upgraded.slice(guardCommand.length);
         }
       }
       // Drop OUR handlers out of the group, not the whole group. Several hosts let one matcher
@@ -213,7 +229,18 @@ function mergeHookSettings(
       if (foreignHandlers.length > 0) kept.push({ ...record, hooks: foreignHandlers });
     }
 
-    hooks[event] = [...kept, ...(Array.isArray(groups) ? groups : [groups])];
+    const incoming = Array.isArray(groups) ? groups : [groups];
+    if (carriedFlags) {
+      // Assigned, never appended: `rendered` is reused across the files of a multi-target
+      // install, and `+=` would stack the same flags once per file.
+      for (const group of incoming) {
+        for (const handler of guardHandlers(group)) {
+          if (typeof handler.command === 'string') handler.command = guardCommand + carriedFlags;
+          else if (typeof handler.bash === 'string') handler.bash = guardCommand + carriedFlags;
+        }
+      }
+    }
+    hooks[event] = [...kept, ...incoming];
   }
 
   settings.hooks = hooks;
@@ -294,7 +321,7 @@ function planJson(
   const events = Object.keys(asRecord(manifest.hooks) ?? {}).length;
   const detail =
     merged.outcome === 'upgraded'
-      ? `repointing the hook off npx @latest → ${ctx.guardCommand}`
+      ? `raising the hook to ${ctx.guardCommand}`
       : `adding ${events} hook event(s)`;
   return row(target, file, 'merge', detail, merged.content);
 }
@@ -395,62 +422,51 @@ function resolveTargets(ids: string[], scope: Scope): Target[] {
 
 /**
  * Decides the hook command before anything is planned, because it changes what the preview
- * shows. Order: an installed binary, else offer to install one, else a pinned npx. The offer
- * only happens on a terminal — a CI run gets the pin silently, which is correct there anyway.
+ * shows: a `vibeward` already on PATH, else a pinned npx.
+ *
+ * There is no offer to install one any more. Recommending a global install made every user's
+ * copy freeze at whatever they installed, and a security tool whose rules stopped moving is
+ * the failure this is supposed to prevent. But removing it left every hook on `npx`, which
+ * measures 2.06s per prompt with a warm cache against 0.13s for a local file — so for user
+ * scope `init` now writes that file itself. The PATH lookup stays ahead of both, because
+ * someone who does have the binary should not be made worse off by a docs decision.
  */
-async function resolveGuardContext(
-  wanted: boolean,
-  yes: boolean,
-  moments: Moment[],
-): Promise<RenderContext> {
-  let guard = resolveGuard();
+function resolveGuardContext(wanted: boolean, scope: Scope, moments: Moment[]): RenderContext {
+  const guard = resolveGuard();
   if (!wanted || guard.binary) {
     return { guardCommand: guard.command, guardTimeout: guard.timeout, moments };
   }
 
-  log(`\n${C.yellow}No installed \`vibeward\` on your PATH.${C.reset}`);
-  log(
-    `${C.dim}The guard runs on every prompt you type. Running it through npx would add a${C.reset}`,
-  );
-  log(
-    `${C.dim}registry round-trip to each one, break with no network, and — the reason that${C.reset}`,
-  );
-  log(`${C.dim}matters — run whatever was published last, unreviewed, on your machine.${C.reset}`);
-
-  if (isInteractive() && !yes) {
-    const ok = await confirm(
-      `\n${C.bold}Install it now?${C.reset} ${C.dim}npm i -g vibeward${C.reset} [y/N] `,
+  // Project scope keeps the pin. `.claude/settings.json` gets committed, so an absolute path
+  // into one developer's home is two problems at once: a hook that fails for everybody else
+  // on the team, and that developer's username published in a repository.
+  const vendored = scope === 'user' ? vendorGuard(homedir()) : null;
+  if (vendored) {
+    log(
+      `\n${C.green}✓${C.reset} ${C.dim}Guard copy at${C.reset} ${C.cyan}${vendored.binary}${C.reset}`,
     );
-    if (ok) {
-      log(`\n${C.dim}$ npm i -g vibeward${C.reset}`);
-      const { spawnSync } = await import('node:child_process');
-      const result = spawnSync('npm', ['i', '-g', 'vibeward'], {
-        stdio: 'inherit',
-        shell: process.platform === 'win32',
-      });
-      if (result.status === 0) {
-        guard = resolveGuard();
-        if (guard.binary) {
-          log(
-            `\n${C.green}✓${C.reset} installed — the hook will run ${C.cyan}${guard.command}${C.reset}`,
-          );
-          return { guardCommand: guard.command, guardTimeout: guard.timeout, moments };
-        }
-        // Installed, but the global bin directory is not on this shell's PATH. Writing the
-        // bare name would produce a hook that fails on every prompt.
-        log(`\n${C.yellow}Installed, but not on this shell's PATH.${C.reset}`);
-      } else {
-        log(
-          `\n${C.yellow}That did not work${C.reset} ${C.dim}(npm exited ${result.status ?? 'abnormally'})${C.reset}`,
-        );
-      }
-    }
+    log(
+      `${C.dim}The hook runs that file directly — no npx, no network, nothing to resolve on${C.reset}`,
+    );
+    log(
+      `${C.dim}the prompt you just typed. Re-run \`npx vibeward@latest init\` to update it.${C.reset}`,
+    );
+    return { guardCommand: vendored.command, guardTimeout: vendored.timeout, moments };
   }
 
+  log(`\n${C.dim}The guard will run ${C.reset}${C.cyan}${guard.command}${C.reset}`);
   log(
-    `${C.dim}Pinning to ${guard.command} instead — a future publish will not run until you${C.reset}`,
+    `${C.dim}Pinned on purpose: it runs on every prompt you type, and \`@latest\` there would${C.reset}`,
   );
-  log(`${C.dim}raise the pin, or install the binary and re-run \`vibeward init\`.${C.reset}`);
+  log(`${C.dim}execute whatever was published last, unreviewed, on your machine. Re-run${C.reset}`);
+  log(
+    `${C.dim}\`npx vibeward@latest init\` to raise the pin — it rewrites the hook in place.${C.reset}`,
+  );
+  if (scope === 'project') {
+    log(
+      `${C.dim}(A project settings file is shared, so it stays on npx. \`--scope user\` is faster.)${C.reset}`,
+    );
+  }
   return { guardCommand: guard.command, guardTimeout: guard.timeout, moments };
 }
 
@@ -531,11 +547,7 @@ export async function runInit(opts: InitOptions): Promise<never> {
     moments = picked;
   }
 
-  const ctx = await resolveGuardContext(
-    guardable && moments.length > 0,
-    opts.yes ?? false,
-    moments,
-  );
+  const ctx = resolveGuardContext(guardable && moments.length > 0, scope, moments);
 
   // Copilot CLI reads a repository's `.claude/settings.json` as well as its own manifest, so
   // installing both in one project registers the guard twice there — two processes and two

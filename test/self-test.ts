@@ -18,7 +18,11 @@ import {
 import { toSarif } from '../src/reporters/sarif.js';
 import { scanIntent } from '../src/checks/intent.js';
 import { resolveSourceMapUrl, sourceMapFinding } from '../src/checks/sourcemaps.js';
-import { extractFirebaseConfig, firebaseStorageFinding } from '../src/checks/firebase.js';
+import {
+  extractFirebaseConfig,
+  firebaseStorageFinding,
+  firebaseTarget,
+} from '../src/checks/firebase.js';
 import {
   checkNextConfigHeaders,
   checkServerActionAuth,
@@ -30,8 +34,10 @@ import {
   robotsBlocksAI,
   analyzeRobots,
   checkWeb,
+  webChecksNotEvaluated,
   WEB_CHECKS,
 } from '../src/checks/web.js';
+import { checkPlainHttp, followPlainHttp } from '../src/checks/transport.js';
 import {
   normalizePageUrl,
   discoverInternalLinks,
@@ -40,6 +46,7 @@ import {
   looksLikeSamePage,
 } from '../src/http/crawl.js';
 import type { SiteFiles } from '../src/http/crawl.js';
+import { coverage, localize, localizeFingerprint } from '../src/core/i18n.js';
 import type { Finding } from '../src/core/types.js';
 import { parseConfig, applySuppressions, notApplicableChecks } from '../src/core/config.js';
 import {
@@ -47,14 +54,19 @@ import {
   pinnedNpxGuard,
   resolveGuard,
   upgradeGuardCommand,
+  vendorGuard,
+  vendorPath,
 } from '../src/init/binary.js';
 import { hookFile } from '../src/init/hooks.js';
+import { mergeHookSettings } from '../src/init/run.js';
 import { HOSTS } from '../src/init/capabilities.js';
 import type { Moment } from '../src/guard/verdict.js';
 
 const ALL_MOMENTS: Moment[] = ['prompt', 'action', 'content'];
 import { RELEASED, VERSION, ageInDays, stalenessNotice } from '../src/core/version.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -293,7 +305,12 @@ console.log('\n4. Report generation');
       dataSecrets: [],
       allResults: [],
     },
-    scanned: ['Headers', 'Secrets', 'RLS'],
+    scanned: [
+      coverage('Headers', 'Cabeceras'),
+      coverage('Secrets', 'Secretos'),
+      coverage('RLS', 'RLS'),
+    ],
+    lang: 'en',
   });
   assert(counts.critical === 1, 'counts 1 critical');
   assert(markdown.includes('Executive summary'), 'report has executive summary');
@@ -982,7 +999,8 @@ console.log('\n24. Isolation — website findings never gate security');
     dateISO: '2026-08-14',
     findings: [secCritical, webMedium, webHigh],
     rls: null,
-    scanned: ['test'],
+    scanned: [coverage('test', 'prueba')],
+    lang: 'en',
   });
   assert(mixed.counts.critical === 1, 'security counts include the security finding');
   assert(
@@ -1003,7 +1021,8 @@ console.log('\n24. Isolation — website findings never gate security');
     dateISO: '2026-08-14',
     findings: [webMedium, webHigh],
     rls: null,
-    scanned: ['test'],
+    scanned: [coverage('test', 'prueba')],
+    lang: 'en',
   });
   assert(
     webOnly.counts.critical === 0 && webOnly.counts.high === 0,
@@ -1164,7 +1183,8 @@ console.log('\n26. vibeward.json — declared intent and suppressions');
     dateISO: '2026-08-14',
     findings: [],
     rls: null,
-    scanned: ['test'],
+    scanned: [coverage('test', 'prueba')],
+    lang: 'en',
     suppressed: split.suppressed,
     configPath: '/repo/vibeward.json',
   });
@@ -1241,7 +1261,8 @@ console.log('\n26. vibeward.json — declared intent and suppressions');
         { id: 'web_missing_lang', label: 'No lang', severity: 'medium', kind: 'web', why: 'w' },
       ],
       rls: null,
-      scanned: ['test'],
+      scanned: [coverage('test', 'prueba')],
+      lang: 'en',
       notApplicable: internal,
     }).markdown;
     assert(
@@ -1337,9 +1358,30 @@ console.log('\n27. Guard hook command — never @latest in a settings.json');
     upgradeGuardCommand('/opt/mine/vibeward guard', 'vibeward guard') === null,
     'a hand-written command is never rewritten',
   );
+  // A pin is no longer a choice anybody made — `init` writes one for everybody, because
+  // nothing recommends a global install any more. Leaving it untouchable would freeze every
+  // user's rules at whatever shipped the day they ran init.
   assert(
-    upgradeGuardCommand('npx vibeward@0.3.0 guard', 'vibeward guard') === null,
-    'a pin the user chose is theirs to raise, not ours',
+    upgradeGuardCommand('npx vibeward@0.3.0 guard', pinnedNpxGuard()) === pinnedNpxGuard(),
+    'an older pin is raised on re-run, which is what makes `init` an update path',
+  );
+  assert(
+    upgradeGuardCommand('npx vibeward@0.3.0 guard --block', pinnedNpxGuard()) ===
+      `${pinnedNpxGuard()} --block`,
+    'and the flags the user added survive that too',
+  );
+  assert(
+    upgradeGuardCommand(`npx vibeward@${VERSION} guard`, pinnedNpxGuard()) === null,
+    'a hook already on this version is left alone',
+  );
+  // Running an old `init` from an npx cache must not drag a newer hook backwards.
+  assert(
+    upgradeGuardCommand('npx vibeward@99.0.0 guard', pinnedNpxGuard()) === null,
+    'a newer pin is never downgraded',
+  );
+  assert(
+    upgradeGuardCommand('npx vibeward@2.0.0-beta.1 guard', pinnedNpxGuard()) === null,
+    'a prerelease pin is not ours to reason about',
   );
 }
 
@@ -1360,7 +1402,10 @@ console.log('\n28. Staleness notice — a pinned copy that knows its own age');
   const old = stalenessNotice(at(200)) ?? '';
   assert(old.includes('6 months'), 'reports the age in months once it is months');
   assert(old.includes(VERSION) && old.includes(RELEASED), 'names the version and its date');
-  assert(old.includes('npm i -g vibeward@latest'), 'gives the one command that fixes it');
+  // The command has to update the thing that is stale. The guard is a version pinned inside
+  // a settings.json, which no package manager touches — only re-running init rewrites it.
+  assert(old.includes('npx vibeward@latest init'), 'gives the one command that fixes it');
+  assert(!old.includes('npm i -g'), 'and not a global install, which nothing recommends now');
   // It has no network, so it must not pretend to know a newer version exists.
   assert(
     !/new(er)? version (is )?available/i.test(old),
@@ -1370,6 +1415,456 @@ console.log('\n28. Staleness notice — a pinned copy that knows its own age');
   // The constant is hand-maintained next to VERSION. These catch the two ways that rots.
   assert(ageInDays() !== null, 'RELEASED in the shipped build actually parses');
   assert((ageInDays() ?? -1) >= 0, 'RELEASED is not in the future');
+}
+
+console.log('\n29. Transport — the plain-HTTP twin of an HTTPS target');
+{
+  // The network half needs a live host, so what is asserted here is the guard logic: which
+  // targets the check refuses to reason about at all. Those are the cases where a wrong
+  // answer would be a false positive against somebody's site.
+  assert(
+    (await checkPlainHttp('http://x.test/')) === null,
+    'a target already given as http:// is not compared against itself',
+  );
+  assert(
+    (await checkPlainHttp('https://x.test:8443/')) === null,
+    'an explicit port has no obvious plain-HTTP twin, so the check declines',
+  );
+  assert((await checkPlainHttp('not a url')) === null, 'an unparseable target is not a finding');
+
+  // The hop loop against a server we control. This is where a false positive would be born,
+  // and it cannot be exercised without owning both ends of the connection.
+  const server = createServer((req, res) => {
+    const path = req.url ?? '/';
+    if (path === '/served') res.writeHead(200).end('<html>hello</html>');
+    else if (path === '/gone') res.writeHead(404).end('no');
+    else if (path === '/upgrade') res.writeHead(301, { Location: 'https://x.test/' }).end();
+    else if (path === '/hop1') res.writeHead(301, { Location: '/hop2' }).end();
+    else if (path === '/hop2') res.writeHead(301, { Location: 'https://x.test/' }).end();
+    else if (path === '/loop') res.writeHead(302, { Location: '/loop' }).end();
+    else res.writeHead(200).end('ok');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    assert(
+      (await followPlainHttp(`${base}/served`)).kind === 'served',
+      'a 200 over plain HTTP is the site being served in the clear',
+    );
+    assert(
+      (await followPlainHttp(`${base}/upgrade`)).kind === 'upgraded',
+      'a 301 straight to https is the shape that is correct',
+    );
+    assert(
+      (await followPlainHttp(`${base}/hop1`)).kind === 'upgraded',
+      'and so is one that upgrades on a later hop, which is why redirects are followed',
+    );
+    assert(
+      (await followPlainHttp(`${base}/gone`)).kind === 'unavailable',
+      'a 4xx over plain HTTP is not the page, so there is nothing to report',
+    );
+    const looped = await followPlainHttp(`${base}/loop`);
+    assert(
+      looped.kind === 'served' && looped.status === 0,
+      'a redirect that never leaves plain HTTP is reported, not followed forever',
+    );
+  } finally {
+    server.close();
+  }
+
+  // Nothing listening on the port is the safest shape a site can have, and reporting it
+  // would be exactly backwards.
+  const idle = createServer();
+  await new Promise<void>((resolve) => idle.listen(0, '127.0.0.1', resolve));
+  const idlePort = (idle.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => idle.close(() => resolve()));
+  assert(
+    (await followPlainHttp(`http://127.0.0.1:${idlePort}/`)).kind === 'unavailable',
+    'a refused connection is not a finding',
+  );
+}
+
+console.log('\n30. Website — a vendor-managed robots.txt is not the file in the repo');
+{
+  const managed = [
+    '# BEGIN Cloudflare Managed content',
+    'User-agent: GPTBot',
+    'Disallow: /',
+    'User-agent: ClaudeBot',
+    'Disallow: /',
+    '# END Cloudflare Managed Content',
+  ].join('\n');
+
+  const all = analyzeRobots(managed);
+  assert(all.managed?.vendor === 'Cloudflare', 'the Cloudflare markers are recognised');
+  assert(all.managed?.covers === 'all', 'a ban written entirely inside the block is "all"');
+
+  const mixed = analyzeRobots(`${managed}\n\nUser-agent: CCBot\nDisallow: /\n`);
+  assert(mixed.managed?.covers === 'some', 'a ban split across both places is "some"');
+
+  const byHand = analyzeRobots('User-agent: GPTBot\nDisallow: /\n');
+  assert(byHand.managed === null, 'a hand-written robots.txt reports no vendor block');
+
+  // The dangerous false positive: a managed block that bans nobody must not make the report
+  // send an owner to a dashboard over a rule they wrote themselves.
+  const innocent = analyzeRobots(
+    '# BEGIN Cloudflare Managed content\nUser-agent: *\nAllow: /\n# END Cloudflare Managed Content\n\nUser-agent: GPTBot\nDisallow: /\n',
+  );
+  assert(
+    innocent.managed === null,
+    'a managed block that carries none of the ban is not blamed for it',
+  );
+
+  const finding = checkWeb({
+    pages: [parsePage('<html lang="en"><body><h1>x</h1></body></html>', 'https://x.test/')],
+    files: goodFiles({ robotsTxt: managed }),
+    brokenAssets: [],
+    jsBytes: 0,
+    consoleErrors: null,
+  }).find((f) => f.id === 'web_robots_blocks_ai');
+  assert(Boolean(finding), 'the robots finding still fires on a managed block');
+  assert(
+    /dashboard|Editing the file in the repository changes nothing/i.test(finding?.why ?? ''),
+    'the remediation points at the dashboard, not at a line to delete',
+  );
+  assert(
+    !/undone by deleting only the/i.test(finding?.why ?? ''),
+    'and it does not also tell them to edit a file that is not being served',
+  );
+}
+
+console.log('\n31. Website — a check with nothing to measure is not a check that passed');
+{
+  const onePage = [parsePage('<html><body><h1>x</h1></body></html>', 'https://x.test/')];
+  const blind = webChecksNotEvaluated({ pages: onePage, assetsChecked: 0 });
+  assert(blind.has('web_duplicate_titles'), 'one page cannot have duplicate titles');
+  assert(blind.has('web_missing_alt'), 'a page with no images cannot be missing alt text');
+  assert(blind.has('web_broken_assets'), 'zero assets requested is not zero assets broken');
+
+  const twoPages = [
+    parsePage('<html><body><img src="a.png" alt="a"></body></html>', 'https://x.test/'),
+    parsePage('<html><body>b</body></html>', 'https://x.test/b'),
+  ];
+  const seeing = webChecksNotEvaluated({ pages: twoPages, assetsChecked: 4 });
+  assert(seeing.size === 0, 'a crawl with real input evaluates all three');
+
+  const md = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-16',
+    findings: [],
+    rls: null,
+    scanned: [coverage('test', 'prueba')],
+    lang: 'en',
+    fingerprint: {
+      host: 'x.test',
+      platformDomain: null,
+      framework: null,
+      clientRendered: false,
+      signals: [],
+      score: 0,
+      total: 12,
+    },
+    notEvaluated: blind,
+  }).markdown;
+  assert(md.includes('not evaluated'), 'the report marks them not evaluated');
+  assert(
+    !/Each page has its own <title> \| ✅/.test(md),
+    'and never claims the unmeasurable one passed',
+  );
+  // 19 checks, 3 of them unmeasurable on this crawl: the denominator has to be 16, not 19,
+  // or the score borrows credit for work that never happened.
+  assert(
+    md.includes('16 of 16 checks passed'),
+    'the passed-count counts only the checks that could be judged',
+  );
+}
+
+console.log('\n32. Report language — the same document in Spanish');
+{
+  const findings: Finding[] = [
+    ...checkHeaders(new Headers()),
+    ...checkWeb({
+      pages: [parsePage('<html><body><h1>a</h1><h1>b</h1></body></html>', 'https://x.test/')],
+      files: goodFiles(),
+      brokenAssets: [],
+      jsBytes: 0,
+      consoleErrors: null,
+    }),
+  ];
+
+  const es = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-16',
+    findings: findings.map((f) => localize(f, 'es')),
+    rls: null,
+    scanned: [coverage('Headers', 'Cabeceras')],
+    lang: 'es',
+  }).markdown;
+
+  assert(es.includes('# Informe de auditoría'), 'the title is Spanish');
+  assert(
+    es.includes('Resumen ejecutivo') && es.includes('Por qué importa'),
+    'so is the scaffolding',
+  );
+  assert(es.includes('Cabeceras'), 'the coverage list uses its Spanish sentence');
+  assert(es.includes('Falta la cabecera Content-Security-Policy'), 'and so are the findings');
+  assert(!es.includes('Why it matters'), 'no English field labels leak into a Spanish report');
+
+  const en = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-16',
+    findings,
+    rls: null,
+    scanned: [coverage('Headers', 'Cabeceras')],
+    lang: 'en',
+  }).markdown;
+  assert(en.includes('Why it matters') && !en.includes('Por qué importa'), 'English stays English');
+
+  // Everything that reaches the page, not just the findings: the fingerprint signal list and
+  // the reason a check was skipped are prose a reader sees, and each was English at first.
+  const fp = fingerprintStack('<html><body>hi</body></html>', 'https://x.test/', 0, emptyFiles);
+  const withFp = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-16',
+    findings: [],
+    rls: null,
+    scanned: [coverage('Headers', 'Cabeceras')],
+    lang: 'es',
+    fingerprint: localizeFingerprint(fp, 'es'),
+    notApplicable: notApplicableChecks({ schemaVersion: 1 }),
+  }).markdown;
+  assert(withFp.includes('Sin sitemap.xml'), 'the fingerprint signals are Spanish too');
+  assert(!withFp.includes('No structured data'), 'and the English ones are gone, not appended');
+  assert(
+    withFp.includes('no se declaró intención de bloquear'),
+    'so is the reason a check did not apply',
+  );
+  assert(
+    !('signalsEs' in localizeFingerprint(fp, 'es')),
+    'localizeFingerprint drops the language it did not pick',
+  );
+  assert(
+    localizeFingerprint(fp, 'en').signals.includes('No sitemap.xml'),
+    'and English is still the identity case',
+  );
+
+  // The overlay is a translation, not a second payload: it must not survive into any output.
+  const one = localize(findings[0]!, 'es');
+  assert(!('es' in one), 'localize strips the overlay it applied');
+  assert('es' in findings[0]!, 'and does not mutate the finding it was given');
+  assert(localize(findings[0]!, 'en').label === findings[0]!.label, 'English is the identity case');
+}
+
+console.log('\n33. The report claims nothing about who authorized the scan');
+{
+  const md = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-16',
+    findings: [],
+    rls: null,
+    scanned: [coverage('test', 'prueba')],
+    lang: 'en',
+  }).markdown;
+  // vibeward cannot know the operator's relationship to the site — only that somebody typed
+  // a URL. A deliverable that certifies permission on their behalf is a liability the moment
+  // it is forwarded, and it was never true of a `--yes` run in the first place.
+  assert(!/owner's authorization/i.test(md), 'no claim of the owner having authorized it');
+  assert(
+    !/(owner'?s? |by the |with the |had )authoriz/i.test(md) && !/authorized (by|to)\b/i.test(md),
+    'and no sentence anywhere asserting that permission was given',
+  );
+  assert(md.includes('non-destructive'), 'it describes what it did instead');
+
+  const passive = buildReport({
+    target: 'https://x.test',
+    dateISO: '2026-08-16',
+    findings: [],
+    rls: null,
+    scanned: [coverage('test', 'prueba')],
+    lang: 'en',
+    active: false,
+  }).markdown;
+  assert(passive.includes('read-only'), 'a passive scan is described as read-only');
+  assert(
+    !buildReport({
+      target: 'https://x.test',
+      dateISO: '2026-08-16',
+      findings: [],
+      rls: null,
+      scanned: [coverage('test', 'prueba')],
+      lang: 'en',
+      active: true,
+    }).markdown.includes('read-only'),
+    'an active scan does not call itself read-only, because it probed',
+  );
+}
+
+console.log('\n34. The probe prompt names what it is about to touch');
+{
+  // A confirmation that says "about to actively probe https://theirsite.com" is a
+  // confirmation people click through, because the URL is the one they just typed. The one
+  // worth reading names the backend they did not know was there.
+  assert(
+    firebaseTarget({ databaseURL: 'https://p-default-rtdb.firebaseio.com/' }) ===
+      'https://p-default-rtdb.firebaseio.com',
+    'the declared database URL wins, without its trailing slash',
+  );
+  assert(
+    firebaseTarget({ projectId: 'p' }).includes('p-default-rtdb'),
+    'a bare projectId resolves to the RTDB address the probe will actually request',
+  );
+  assert(
+    firebaseTarget({ storageBucket: 'p.appspot.com' }).includes('p.appspot.com'),
+    'a storage-only config names the bucket endpoint',
+  );
+  assert(firebaseTarget({}).length > 0, 'and an empty config still says something');
+}
+
+console.log('\n35. Re-running init raises the pin without disarming the guard');
+{
+  // Found by running the real CLI, not by a unit test: `upgradeGuardCommand` preserves the
+  // flags a user added, and the caller read its result as a boolean and threw the string
+  // away — our handlers were dropped and the freshly rendered ones appended. Harmless while
+  // only a rare legacy `@latest` hook was ever rewritten. Now every re-run raises the pin, so
+  // it meant `--block` came off on the next update: a guard silently demoted from blocking to
+  // warning, in a file nobody re-reads.
+  const settings = (command: string): string =>
+    JSON.stringify({
+      hooks: {
+        UserPromptSubmit: [
+          { hooks: [{ type: 'command', command, timeout: 60, vibeward: 'vibeward v0.3.0' }] },
+        ],
+      },
+    });
+
+  const rendered = {
+    hooks: {
+      UserPromptSubmit: [
+        {
+          hooks: [
+            {
+              type: 'command',
+              command: pinnedNpxGuard(),
+              timeout: 60,
+              vibeward: `vibeward v${VERSION}`,
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  const blocking = mergeHookSettings(
+    settings('npx vibeward@0.3.0 guard --block'),
+    structuredClone(rendered),
+    pinnedNpxGuard(),
+  );
+  assert(blocking?.outcome === 'upgraded', 'an older pin is reported as an upgrade');
+  assert(
+    (blocking?.content ?? '').includes(`${pinnedNpxGuard()} --block`),
+    'and --block survives it, so a blocking guard stays blocking',
+  );
+
+  const plain = mergeHookSettings(
+    settings('npx vibeward@0.3.0 guard'),
+    structuredClone(rendered),
+    pinnedNpxGuard(),
+  );
+  assert(
+    (plain?.content ?? '').includes(pinnedNpxGuard()) && !(plain?.content ?? '').includes('0.3.0'),
+    'a hook with no flags is raised to the current pin',
+  );
+
+  // A user's own hook sitting beside ours is not ours to touch, upgrade or otherwise.
+  const foreign = JSON.stringify({
+    hooks: {
+      UserPromptSubmit: [
+        { hooks: [{ type: 'command', command: 'npx vibeward@0.3.0 guard' }] },
+        { hooks: [{ type: 'command', command: 'my-own-linter' }] },
+      ],
+    },
+  });
+  const kept = mergeHookSettings(foreign, structuredClone(rendered), pinnedNpxGuard());
+  assert((kept?.content ?? '').includes('my-own-linter'), "somebody else's hook is preserved");
+
+  // Idempotence: the same rendered object is reused across the files of a multi-target
+  // install, so appending rather than assigning would stack the flags once per file.
+  const shared = structuredClone(rendered);
+  const first = mergeHookSettings(
+    settings('npx vibeward@0.3.0 guard --block'),
+    shared,
+    pinnedNpxGuard(),
+  );
+  const second = mergeHookSettings(
+    settings('npx vibeward@0.3.0 guard --block'),
+    shared,
+    pinnedNpxGuard(),
+  );
+  assert(
+    first?.content === second?.content && !(second?.content ?? '').includes('--block --block'),
+    'merging twice with one rendered manifest does not stack the flags',
+  );
+}
+
+console.log('\n36. The vendored guard copy — a fast hook without a global install');
+{
+  // Removing the global install left every hook on a pinned npx, measured at 2.06s per
+  // prompt against 0.13s for a local file. `init` writes that file itself now, and these are
+  // the properties that make it safe to point a per-prompt hook at it.
+  const home = mkdtempSync(join(tmpdir(), 'vibeward-home-'));
+
+  const resolved = vendorGuard(home);
+  // `bin/vibeward.mjs` is a build artifact, absent in a fresh clone until `build:plugin`
+  // runs. Returning null there is the contract, not a failure — so the suite asserts that
+  // branch instead of going red on a checkout nobody has built yet. CI builds it first, so
+  // the real path below is always the one exercised there.
+  if (resolved === null) {
+    assert(true, 'no bundle built: vendoring declines, as it must (run npm run build:plugin)');
+  } else {
+    assert(
+      resolved.binary === vendorPath(home),
+      'it lands under ~/.vibeward/<version>/, one directory per version',
+    );
+    assert(
+      resolved.command === `node "${vendorPath(home)}" guard`,
+      'and the hook runs it directly — no npx, nothing to resolve',
+    );
+    assert(resolved.timeout === 10, 'with the short timeout a local file earns');
+    assert(existsSync(vendorPath(home)), 'the copy is really on disk');
+
+    // Idempotent: re-running init must not depend on the directory being absent.
+    assert(vendorGuard(home)?.command === resolved.command, 'vendoring twice is the same answer');
+
+    // A copy that cannot be made must never become a hook. A broken hook fails on every prompt
+    // and fails quietly, which is worse than a slow one.
+    const blocked = join(mkdtempSync(join(tmpdir(), 'vibeward-ro-')), 'file-not-a-dir');
+    writeFileSync(blocked, 'not a directory');
+    assert(vendorGuard(blocked) === null, 'a home it cannot write to falls back instead of lying');
+
+    // Raising a vendored hook, which is the whole update path for it.
+    const older = `node "${vendorPath(home, '0.3.0')}" guard`;
+    assert(
+      upgradeGuardCommand(older, resolved.command) === resolved.command,
+      'an older vendored copy is raised on re-run',
+    );
+    assert(
+      upgradeGuardCommand(`${older} --block`, resolved.command) === `${resolved.command} --block`,
+      'and --block survives, so a blocking guard is never quietly demoted',
+    );
+    assert(
+      upgradeGuardCommand(vendorPath(home, '99.0.0'), resolved.command) === null &&
+        upgradeGuardCommand(`node "${vendorPath(home, '99.0.0')}" guard`, resolved.command) ===
+          null,
+      'a newer vendored copy is never downgraded',
+    );
+    // The shape is what marks it as ours, not the mere fact of being an absolute path.
+    assert(
+      upgradeGuardCommand('node "/opt/mine/vibeward.mjs" guard', resolved.command) === null,
+      'a path somebody typed themselves is still theirs',
+    );
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);
