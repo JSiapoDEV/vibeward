@@ -293,8 +293,8 @@ for everyone else. `--warn` still works as an alias of the default for older `se
 ### Claude Code: as a plugin
 
 ```bash
-claude plugin marketplace add JSiapoDEV/vibeward
-claude plugin install vibeward@vibeward
+claude plugin marketplace add JSiapoDEV/plugins
+claude plugin install vibeward
 ```
 
 That is the whole install. The skill and all three guard moments come with it, nothing is written

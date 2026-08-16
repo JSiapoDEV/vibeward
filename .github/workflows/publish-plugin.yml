@@ -13,8 +13,10 @@ name: publish-plugin
 # `plugin` branch. `main` stays free of build output, and the branch keeps exactly one commit
 # — a 300 KB bundle that changes every release would otherwise grow the history forever.
 #
-# `.claude-plugin/marketplace.json` lives on `main` and points the plugin at that branch, so
-# `/plugin marketplace add JSiapoDEV/vibeward` still works unchanged.
+# The catalog that points at this branch is not in this repository: it lives in
+# `JSiapoDEV/plugins`, so that installing a plugin that is not vibeward never means adding the
+# vibeward repository. Nothing here changes when it gains an entry —
+# `claude plugin marketplace add JSiapoDEV/plugins`, then `claude plugin install vibeward`.
 
 on:
   push:
