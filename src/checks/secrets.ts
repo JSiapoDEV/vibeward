@@ -100,19 +100,41 @@ export const SECRET_PATTERNS: SecretPattern[] = [
   {
     id: 'stripe_secret',
     es: {
-      label: 'Clave secreta o restringida de Stripe',
+      label: 'Clave secreta o restringida de Stripe en producción',
       exploit:
         'Con esta clave un atacante puede crear cobros, emitir reembolsos a sus propias tarjetas y leer tus registros de clientes y de pagos por la API de Stripe.',
       why: 'Una clave secreta de Stripe filtrada puede vaciar dinero y exponer datos de pago. No debe salir nunca del servidor. Rótala de inmediato.',
     },
-    label: 'Stripe secret / restricted key',
+    label: 'Stripe live secret / restricted key',
     severity: 'critical',
     check: 2,
     cwe: 'CWE-798',
-    regex: /\b(sk|rk)_(live|test)_[A-Za-z0-9]{20,}\b/g,
+    // Live only. Test mode is the rule below, because it is a different problem: one moves
+    // real money and the other cannot, and announcing both as "critical — can drain money"
+    // is simply wrong about one of them. Found scanning a real site that shipped both, where
+    // the test key was described in the same words as the live one beside it.
+    regex: /\b(sk|rk)_live_[A-Za-z0-9]{20,}\b/g,
     exploit:
       'With this key an attacker can create charges, issue refunds to their own cards and read your customer and payment records via the Stripe API.',
     why: 'A leaked Stripe secret key can drain money and expose payment data. It must never leave the server. Rotate it immediately.',
+    references: [CWE_798, 'https://stripe.com/docs/keys'],
+  },
+  {
+    id: 'stripe_test_secret',
+    es: {
+      label: 'Clave secreta de Stripe en modo de prueba',
+      exploit:
+        'Quien la lea puede usar la API de Stripe en modo de prueba de tu cuenta: leer los clientes, los pagos y los productos de prueba, y crear cobros falsos que ensucian tus datos.',
+      why: 'Una clave de test no mueve dinero real, así que esto no es una emergencia. Sí son dos cosas: los datos de prueba de tu cuenta quedan legibles, y sobre todo el patrón — una clave secreta llegó al bundle del navegador, y el mismo camino de despliegue es el que lleva la de producción. Sácala del cliente y comprueba que la `sk_live_` no viajó por la misma ruta.',
+    },
+    label: 'Stripe test secret / restricted key',
+    severity: 'medium',
+    check: 2,
+    cwe: 'CWE-798',
+    regex: /\b(sk|rk)_test_[A-Za-z0-9]{20,}\b/g,
+    exploit:
+      'Anyone reading the bundle can drive your Stripe account in test mode: read test customers, payments and products, and create fake charges that pollute your data.',
+    why: 'A test key moves no real money, so this is not an emergency. It is two things: your test-mode data is readable, and — the part that matters — a secret key reached the browser bundle at all. The same deploy path carries the live one. Move it server-side and check that the `sk_live_` key did not travel the same way.',
     references: [CWE_798, 'https://stripe.com/docs/keys'],
   },
   {
@@ -332,6 +354,11 @@ export const SECRET_PATTERNS: SecretPattern[] = [
       ) {
         return null;
       }
+      // `apikey: "<anon key>"` is how every Supabase client is configured, and that key is
+      // public by design. Asking someone to review a value this can prove is fine is noise,
+      // and on the stack this tool exists for it was noise twice per app.
+      const literal = /["'`]([^"'`]+)["'`]\s*$/.exec(match)?.[1];
+      if (literal && isPublicByDesign(literal)) return null;
       return { snippet: mask(match) };
     },
     exploit: 'If this is a live secret, anyone reading the bundle can use it directly.',
@@ -418,11 +445,37 @@ const BEARER_PATTERN: SecretPattern = {
 const PLACEHOLDER =
   /^(?:your|my|example|sample|test|demo|dummy|fake|changeme|replace|insert|token|abc|xxx)|(?:here|placeholder|token|key)$|\.\.\.|<|\$\{/i;
 
+/** A JWT: three base64url segments, the first one a `{"alg"…` header. */
+const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
 /** Enough variety to be a generated credential rather than a word or a repeated character. */
 function looksGenerated(value: string): boolean {
   if (value.length < 20 || PLACEHOLDER.test(value)) return false;
   if (new Set(value).size < 8) return false;
-  return /\d/.test(value) && /[A-Za-z]/.test(value);
+  if (!/\d/.test(value) || !/[A-Za-z]/.test(value)) return false;
+  // A dotted value is only credential-shaped when it is a JWT. The charset here has to allow
+  // dots for that case, and allowing them let a namespaced library string through: a real
+  // scan reported `Authorization: Bearer i18next.…` off a translation bundle, at high
+  // severity, on somebody's production site. A token is one opaque run or it is a JWT.
+  if (value.includes('.') && !JWT_SHAPE.test(value)) return false;
+  return true;
+}
+
+/**
+ * Credentials that are supposed to be in the browser, and are supposed to travel as a bearer
+ * token. Reporting one is not a small inaccuracy: it is the single most common shape in the
+ * exact ecosystem this tool exists for, so it would fire on almost every Supabase app anyone
+ * pointed it at — and a scanner that cries about the documented, correct design is a scanner
+ * people stop reading. Found by scanning real Lovable apps: two of eight shipped an anon JWT
+ * behind `Authorization: Bearer`, exactly as Supabase's own client does.
+ *
+ * `service_role` is deliberately not here. That one bypasses RLS and is a critical finding of
+ * its own, caught by `supabase_service_role`.
+ */
+function isPublicByDesign(value: string): boolean {
+  if (/^sb_publishable_/.test(value)) return true;
+  const role = decodeJwtRole(value);
+  return role === 'anon' || role === 'authenticated';
 }
 
 function* matchBearerTokens(text: string): Generator<RawMatch> {
@@ -433,7 +486,9 @@ function* matchBearerTokens(text: string): Generator<RawMatch> {
   let m: RegExpExecArray | null;
   while ((m = inline.exec(text)) !== null) {
     const value = m[1]!;
-    if (looksGenerated(value) && !found.has(value)) found.set(value, m.index);
+    if (looksGenerated(value) && !isPublicByDesign(value) && !found.has(value)) {
+      found.set(value, m.index);
+    }
   }
 
   // 2. Minified: `"Bearer ".concat(B)`, `` `Bearer ${B}` `` or `"Bearer "+B`, with the literal
@@ -443,10 +498,22 @@ function* matchBearerTokens(text: string): Generator<RawMatch> {
     const ident = m[1]!;
     const assign = new RegExp(`\\b${ident}\\s*[=:]\\s*["'\`]([A-Za-z0-9._~+/=-]{20,})["'\`]`, 'g');
     let a: RegExpExecArray | null;
+
+    // Every candidate first, then a decision — never "report each one as it turns up".
+    // A minified file reuses `B` for a dozen unrelated things, so taking each assignment on
+    // sight reported whatever string happened to share the name: a real scan produced
+    // `Authorization: Bearer i18n…` from a translation bundle. When more than one distinct
+    // credential-shaped literal answers to the identifier, which one reaches the header is
+    // unknowable from a regex, and the tie goes to saying nothing.
+    const candidates = new Map<string, number>();
     while ((a = assign.exec(text)) !== null) {
       const value = a[1]!;
-      if (looksGenerated(value) && !found.has(value)) found.set(value, a.index);
+      if (looksGenerated(value) && !isPublicByDesign(value)) candidates.set(value, a.index);
     }
+    if (candidates.size !== 1) continue;
+
+    const [value, index] = [...candidates][0]!;
+    if (!found.has(value)) found.set(value, index);
   }
 
   for (const [value, index] of found) {

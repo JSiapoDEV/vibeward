@@ -1867,5 +1867,86 @@ console.log('\n36. The vendored guard copy — a fast hook without a global inst
   }
 }
 
+console.log('\n37. Secret detection — precision, checked against real deployed apps');
+{
+  // Every case here came from scanning ten live Lovable/Supabase sites. All three were
+  // wrong in the direction that costs the most: noise on the exact stack this tool exists
+  // to audit, which is how a security scanner gets uninstalled.
+  const anonJwt = fakeJwt('anon');
+  const serviceJwt = fakeJwt('service_role');
+  const realToken = 'a852d372df4711967c81aa1c3b5629dfa12af8693eb67cd1';
+
+  // (a) The Supabase anon key is public by design and travels as a bearer token. Two of
+  //     eight real sites shipped exactly this, and it was reported as a high finding.
+  const anon = scanText(`fetch("/x",{headers:{Authorization:"Bearer ${anonJwt}"}})`, 'bundle.js');
+  assert(
+    !anon.some((f) => f.id === 'hardcoded_bearer'),
+    'an anon JWT behind Bearer is not a leaked token — it is the documented design',
+  );
+  assert(
+    scanText(
+      `const k="sb_publishable_${'a'.repeat(30)}";fetch("/x",{headers:{Authorization:"Bearer "+k}})`,
+      'b.js',
+    ).every((f) => f.id !== 'hardcoded_bearer'),
+    'and neither is an sb_publishable_ key',
+  );
+  // The one that really is dangerous still fires, through its own rule.
+  assert(
+    scanText(`const k="${serviceJwt}"`, 'b.js').some((f) => f.id === 'supabase_service_role'),
+    'service_role is untouched by that exemption',
+  );
+
+  // (b) In a minified bundle one identifier holds a dozen unrelated strings. Taking each
+  //     assignment on sight produced `Authorization: Bearer i18n…` from a translation blob.
+  const ambiguous = `var B="i18nStrings0123456789abcdef";var B="${realToken}";fetch("/x",{headers:{Authorization:"Bearer ".concat(B)}})`;
+  assert(
+    !scanText(ambiguous, 'b.js').some((f) => f.id === 'hardcoded_bearer'),
+    'two candidate literals for one identifier is unknowable, so nothing is claimed',
+  );
+  // The one that survived the ambiguity fix and had to be killed at the root: a namespaced
+  // library string is not a credential, and the charset only allows dots so that JWTs fit.
+  assert(
+    !scanText(
+      'var q="i18next.translation.store.0123456789abcdef.boo";fetch("/x",{headers:{Authorization:"Bearer ".concat(q)}})',
+      'b.js',
+    ).some((f) => f.id === 'hardcoded_bearer'),
+    'a dotted namespace string is not a token, however long it is',
+  );
+  const unambiguous = `var B="${realToken}";fetch("/x",{headers:{Authorization:"Bearer ".concat(B)}})`;
+  assert(
+    scanText(unambiguous, 'b.js').some((f) => f.id === 'hardcoded_bearer'),
+    'and the single-assignment case it was written for still fires',
+  );
+
+  // Same reasoning one rule over: `apikey: "<anon key>"` is how every Supabase client is
+  // configured. Asking for a review of a value this can prove is public was noise twice per
+  // app on the exact stack the tool targets.
+  assert(
+    !scanText(`{apikey:"${anonJwt}"}`, 'b.js').some((f) => f.id === 'generic_secret_assign'),
+    'a provably public key is not a suspicious assignment',
+  );
+  assert(
+    scanText(`{apikey:"sk_live_${'a'.repeat(30)}"}`, 'b.js').length > 0,
+    'and a real secret in the same position still is',
+  );
+
+  // (c) A test-mode Stripe key cannot move money, and was announced in the words of one
+  //     that can — on a site that shipped both, side by side.
+  const live = scanText(`const k="sk_live_${'a'.repeat(30)}"`, 'b.js');
+  const test = scanText(`const k="sk_test_${'a'.repeat(30)}"`, 'b.js');
+  assert(
+    live.some((f) => f.id === 'stripe_secret' && f.severity === 'critical'),
+    'a live key is critical',
+  );
+  assert(
+    test.some((f) => f.id === 'stripe_test_secret' && f.severity === 'medium'),
+    'a test key is its own finding at its own severity',
+  );
+  assert(
+    !test.some((f) => /drain money/.test(f.why)),
+    'and is never described as able to drain money, because it cannot',
+  );
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
