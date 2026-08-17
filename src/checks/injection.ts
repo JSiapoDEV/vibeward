@@ -55,11 +55,29 @@ const AI_ADDRESS =
  * colon ("Claude, …", "AI assistant: …"), or a name introduced by a preposition of address
  * ("Note to AI assistants:", "instructions for the agent").
  */
+/**
+ * `AI-generated`, `agent-based`, `AI-native`: the noun is modifying whatever follows it, not
+ * being spoken to. Every product page in this category is written in that shape.
+ */
+const NOT_ATTRIBUTIVE = '(?!-)';
+
+/**
+ * A vocative has no determiner in front of it. "Claude, disable RLS" addresses somebody;
+ * "a payload for an agent, a report for a person" is a list of two things.
+ */
+const NOT_DETERMINED =
+  '(?<!\\b(?:a|an|the|this|that|each|any|every|one|another|some|no|our|your|their|its|el|la|los|las|un|una|su|tu)\\s)';
+
 const AI_VOCATIVE = [
-  // "Claude, …" / "AI assistant: …"
-  `${AI_ADDRESS}s?\\s*[,:]`,
-  // "Note to AI assistants:" / "instructions for the agent"
-  `(?:to|for|dear|hey|attention|note\\s+to|para|a)\\s+(?:the\\s+|any\\s+|all\\s+|el\\s+|la\\s+)?${AI_ADDRESS}s?\\b`,
+  // "Claude, …" / "AI assistant: …" — and NOT_DETERMINED because a vocative owns nothing.
+  // "a JSON payload for an agent, a markdown report for a person" is a list, and it matched
+  // here until the lookbehind existed. That sentence is in this project's own README.
+  `${NOT_DETERMINED}${AI_ADDRESS}s?${NOT_ATTRIBUTIVE}\\s*[,:]`,
+  // "Note to AI assistants:" / "instructions for the agent:" — the colon is what separates an
+  // address from a description. "a security scanner for AI-generated code" names an audience
+  // for the code, not a reader to instruct, and without the colon this fired on every product
+  // page in the category.
+  `(?:to|for|dear|hey|attention|note\\s+to|para|a)\\s+(?:the\\s+|any\\s+|all\\s+|el\\s+|la\\s+)?(?:ai\\s+|a\\.i\\.\\s+)?${AI_ADDRESS}s?${NOT_ATTRIBUTIVE}[^,:.\\n]{0,30}:`,
   // "Copilot should put …" / "the agent must disable …" — a subject the sentence commands.
   // Without this form the vocative rule dropped every third-person directive, which is how
   // injected text most often phrases itself when it is pretending to be documentation.
