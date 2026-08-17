@@ -43,11 +43,18 @@ what it should do next.
 
 **It does three things:**
 
-1. **Detects**, deterministically and with no LLM call anywhere — 38 finding rules over a
-   deployed site or a code folder, plus 8 intent rules over natural language in English,
-   Spanish and Portuguese.
+1. **Detects**, deterministically and with no LLM call anywhere — **25 security rules** and
+   **19 website checks** over a deployed site or a code folder, plus **8 intent rules** over
+   natural language in **English, Spanish and Portuguese**, held to **725 assertions**.
 2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
 3. **Warns first**, through editor hooks, at the moments risk enters the system.
+
+**Every rule is its own.** vibeward is not a wrapper: it shells out to no scanner, has **no
+runtime dependencies**, and each rule lives in this repository where you can read it, test it and
+disagree with it. That is a deliberate trade — a tool that orchestrates ten other tools inherits
+ten installers, ten upgrade paths and ten sets of false positives, and cannot tell you why any
+individual finding fired. The cost is coverage: the list below is finite and shorter than the
+union of everything else out there.
 
 **It does not:**
 
@@ -68,6 +75,14 @@ what it should do next.
 What the hooks can actually enforce depends on which editor you run — the guarantees are not the
 same everywhere, and [Install it into your AI tools](#install-it-into-your-ai-tools) says exactly
 where each one degrades.
+
+**Who it is for, and who it is not.** It is for the person who shipped a Supabase, Lovable, Bolt
+or v0 app and is the only one responsible for it — one developer, one app, no security team to
+escalate to. It is **not** an enterprise AppSec programme, and it does not pretend to be: if you
+need policy governance across an organisation, control over which AI tools your developers may
+use, an inventory of AI components, or SAST across a monorepo, buy something built for that.
+Several vendors do it well and this is not competing with them. Knowing which one you need is
+worth more than either tool's feature list.
 
 ---
 
