@@ -45,7 +45,7 @@ what it should do next.
 
 1. **Detects**, deterministically and with no LLM call anywhere — **25 security rules** and
    **19 website checks** over a deployed site or a code folder, plus **8 intent rules** over
-   natural language in **English, Spanish and Portuguese**, held to **725 assertions**.
+   natural language in **English, Spanish and Portuguese**, held to **731 assertions**.
 2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
 3. **Warns first**, through editor hooks, at the moments risk enters the system.
 
@@ -83,6 +83,23 @@ need policy governance across an organisation, control over which AI tools your 
 use, an inventory of AI components, or SAST across a monorepo, buy something built for that.
 Several vendors do it well and this is not competing with them. Knowing which one you need is
 worth more than either tool's feature list.
+
+**Built with Claude Code**, which is worth saying out loud in a project whose subject is the code
+AI agents produce. The objection is obvious and fair: a security tool written by an agent is
+exactly the kind of thing this tool exists to be suspicious of. That is why every rule is
+deterministic and readable in this repository, why there are **731 assertions** including corpora
+of harmless input built specifically to make the rules misfire, and why the release notes lead
+with false positives rather than features.
+
+The useful half is that **it catches its own author.** Writing the line above about a JSON payload
+"for an agent, a formatted report for a person" tripped the content gate. Staging a commit with
+`git add -A` tripped the action gate. Printing a real bearer token on a sample page made
+vibeward report vibeward.ai — correctly, since a literal reaching an `Authorization` header cannot
+be told apart from a deployment. Each one was fixed in the rules or in the content; none was
+silenced, because security findings are the one class `vibeward.json` deliberately cannot suppress.
+
+_vibeward is not affiliated with, sponsored by or endorsed by Anthropic. Claude Code is the editor
+it guards first, and the one it was written in._
 
 ---
 
