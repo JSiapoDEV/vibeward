@@ -1,5 +1,5 @@
 name: 'vibeward'
-description: 'Security & website-quality scan for AI-generated / vibe-coded apps and sites (Supabase, Lovable, MCP). Uploads results to the GitHub Security tab.'
+description: 'Security & website-quality scan for AI-generated / vibe-coded apps and sites (Supabase, Firebase, Lovable). Uploads results to the GitHub Security tab.'
 branding:
   icon: 'shield'
   color: 'green'
