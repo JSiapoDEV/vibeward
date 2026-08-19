@@ -117,6 +117,41 @@ const BENIGN: [content: string, trap: string][] = [
     'Claude can read your codebase and suggest changes to the auth middleware.',
     'named, not addressed',
   ],
+  // An enumeration is the single most common sentence shape in this whole product category,
+  // and for one release every one of these was reported as an injected instruction: the
+  // vocative alternation was interpolated into the directive rule unwrapped, so its first
+  // branch — a name followed by a comma — matched with no verb and no target present. The
+  // first two are lifted verbatim from Anthropic's plugin documentation and the third from
+  // this project's own landing page, which is how the bug was found: reading the docs set it
+  // off four times in one session.
+  [
+    'Plugins extend Claude Code with skills, agents, hooks, and MCP servers.',
+    'a list of nouns, one of which happens to be "agents"',
+  ],
+  [
+    'The detail view shows the components the plugin contributes: commands, skills, agents, hooks, MCP servers, and LSP servers.',
+    'the same list, this time after a colon',
+  ],
+  [
+    'Runs in Claude Code, Cursor, Codex, Copilot, Gemini, Windsurf, opencode.',
+    "this project's own landing page names seven editors in a row",
+  ],
+  [
+    'AI Coding Agent Security: Practical Guardrails for Claude Code, Copilot, and Codex',
+    'an article title enumerating the tools it covers',
+  ],
+  [
+    'Findings reach the writing Claude as instructions, and Claude addresses them in the conversation.',
+    'a possessive and a verb, not an address',
+  ],
+  [
+    'Nuestro agente, el que revisa el código, corre local.',
+    'the same shape in Spanish, where the comma opens a relative clause',
+  ],
+  [
+    'O agente, que revisa o código, roda local.',
+    'and in Portuguese, which the lexicon also compiles',
+  ],
 ];
 
 /** Injected instructions. Losing one of these is the point of the gate. */
