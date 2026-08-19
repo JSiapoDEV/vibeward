@@ -161,8 +161,10 @@ console.log('\n1. Secret detection');
     scanCrawledPages([app], [], scanText(app.html, 'https://s.test/')).length === 0,
     'a key already found by an earlier pass is not reported again',
   );
-  // The anon key is public by design and must never be reported, wherever it sits — this is the
-  // real videoapuntes case, whose only Supabase key in app.html is the anon key.
+  // The anon key is public by design and must never be reported, wherever it sits. This entry
+  // comes from a real scan of a deployed app whose only Supabase key in its HTML was the anon
+  // key; reporting it would have been a false positive handed to a stranger. The app is not
+  // named here, and no scanned third party is named anywhere in this repository.
   const anonApp = {
     url: 'https://s.test/app',
     html: `<html><body><script>createClient("https://y.supabase.co","${fakeJwt('anon')}")</script></body></html>`,
