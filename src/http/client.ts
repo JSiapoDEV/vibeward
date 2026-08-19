@@ -1,8 +1,14 @@
+import { VERSION } from '../core/version.js';
+
 // Identifies the scanner and points at its docs, the way every well-behaved crawler does.
 // It deliberately claims nothing about authorization: the site owner reads this string in
 // their logs, and vibeward is in no position to assert to them that the operator had their
 // permission. The operator is asked that question at the terminal instead.
-const UA = 'Mozilla/5.0 (compatible; vibeward/0.5; +https://vibeward.ai)';
+//
+// Derived from VERSION rather than typed out: the hand-written copy said 0.5 while the
+// package was on 0.6, so the one string whose whole job is to identify the caller honestly
+// was the one telling a site owner something untrue.
+const UA = `Mozilla/5.0 (compatible; vibeward/${VERSION}; +https://vibeward.ai)`;
 
 export interface FetchResult {
   ok: boolean;
