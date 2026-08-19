@@ -89,7 +89,9 @@ AI agents produce. The objection is obvious and fair: a security tool written by
 exactly the kind of thing this tool exists to be suspicious of. That is why every rule is
 deterministic and readable in this repository, why there are **751 assertions** including corpora
 of harmless input built specifically to make the rules misfire, and why the release notes lead
-with false positives rather than features.
+with false positives rather than features. [`METHODOLOGY.md`](METHODOLOGY.md) states what those
+numbers were measured against, what they do not cover, and how to reproduce every one of them from
+a tag — including the postmortem of the release whose fix turned out to be half a fix.
 
 The useful half is that **it catches its own author.** Writing the line above about a JSON payload
 "for an agent, a formatted report for a person" tripped the content gate. Staging a commit with
