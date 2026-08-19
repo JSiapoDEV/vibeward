@@ -195,6 +195,50 @@ for (const [hostId, cases] of Object.entries(CASES)) {
   }
 }
 
+console.log('\nHost conformance — `--block` actually blocks where it says it does\n');
+{
+  // The README documents `--block` as a hard stop at the prompt on Claude Code, and
+  // capabilities.ts declares `canBlock: true` for that moment. Both were true on paper and
+  // false in the wire bytes: the adapter only emitted a decision for the `action` moment, so a
+  // prompt-moment deny fell through to the plain-note branch and exited 0. The flag was a
+  // no-op on the one host its documentation names, and nothing in this suite noticed, because
+  // nothing in this suite passed the flag.
+  const blocked = evaluate(
+    {
+      hook_event_name: 'UserPromptSubmit',
+      prompt_id: 'x',
+      permission_mode: 'default',
+      prompt: RISKY_PROMPT,
+    },
+    { host: 'claude-code', block: true },
+  );
+  assert(blocked.code === 2, 'claude-code/prompt: --block exits 2, which is what stops a prompt');
+  assert(
+    (blocked.stderr ?? '').includes('vibeward'),
+    'claude-code/prompt: --block explains itself on stderr, where the person reads it',
+  );
+  assert(
+    !blocked.stdout,
+    'claude-code/prompt: --block does not also print JSON nobody is left to read',
+  );
+
+  // And the default stays a note, because that decision — correct the agent rather than delete
+  // the paragraph the user just typed — is the one v0.3.1 made deliberately.
+  const noted = evaluate(
+    {
+      hook_event_name: 'UserPromptSubmit',
+      prompt_id: 'x',
+      permission_mode: 'default',
+      prompt: RISKY_PROMPT,
+    },
+    { host: 'claude-code' },
+  );
+  assert(
+    noted.code === 0 && (noted.stdout ?? '').includes('additionalContext'),
+    'claude-code/prompt: without --block the prompt survives and the agent is told',
+  );
+}
+
 console.log('\nHost conformance — a clean payload is silent everywhere\n');
 for (const [hostId, cases] of Object.entries(CASES)) {
   for (const c of cases) {

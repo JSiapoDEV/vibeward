@@ -144,6 +144,17 @@ const claudeCode: Adapter = {
   read: readClaudeLike,
   reply(v, incoming) {
     const event = incoming.event ?? 'UserPromptSubmit';
+    // `--block` at the prompt. `UserPromptSubmit` has no `permissionDecision` field — the only
+    // way to stop a prompt on this host is exit 2, where stderr goes to the person and never
+    // to the model. So this is `humanNote`, not `modelNote`: the prompt is gone, there is no
+    // agent turn left to inform, and the reader is the one who has to decide what to retype.
+    //
+    // Without this branch a prompt-moment `deny` fell through to the plain-note return below
+    // and exited 0, which made `--block` a no-op on the one editor the README documents it
+    // for, while capabilities.ts kept advertising `canBlock: true`.
+    if (v.action === 'deny' && incoming.moment === 'prompt') {
+      return { stderr: humanNote(v), code: 2 };
+    }
     if (v.action === 'deny' && incoming.moment === 'action') {
       return {
         stdout: JSON.stringify({
