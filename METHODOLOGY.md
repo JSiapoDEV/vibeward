@@ -1,6 +1,6 @@
 # Measurement methodology
 
-vibeward publishes three numbers that reproduce from this repository: **751 assertions**, **0
+vibeward publishes three numbers that reproduce from this repository: **770 assertions**, **0
 false positives on 46 benign documents**, **0 false positives on 79 benign prompts across three
 languages**. A fourth — **30 of 31 real apps scanned without a crash** — does not reproduce from
 anything, and is kept out of this list on purpose; §6 gives it in full and says why nobody but the
@@ -179,8 +179,8 @@ figure is their sum.
 | `test/intent-test.ts`    | **136**    | The prompt gate, en + es + pt                                            |
 | `test/injection-test.ts` | **83**     | The content gate                                                         |
 | `test/hosts-test.ts`     | **164**    | One golden payload per editor, per moment, plus adversarial regressions  |
-| `test/contract-test.ts`  | **23**     | The promises in §1.2, asserted                                           |
-| **Total**                | **751**    |                                                                          |
+| `test/contract-test.ts`  | **42**     | The promises in §1.2, asserted                                           |
+| **Total**                | **770**    |                                                                          |
 
 `test/self-test.ts:1` states its own boundary: _"Self-test with SYNTHETIC data (no real secrets).
 Validates detection logic without touching any external system."_ No suite touches an external

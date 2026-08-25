@@ -6,8 +6,10 @@ import { analyzeSupabaseExport } from '../checks/supabase.js';
 import type { RlsResult } from '../checks/supabase.js';
 import type { StackFingerprint } from '../checks/web.js';
 import type { Finding, SuppressedFinding } from '../core/types.js';
-import { localize, localizeFingerprint } from '../core/i18n.js';
+import { localize, localizeFingerprint, coverageText } from '../core/i18n.js';
 import type { CoverageLine, Lang } from '../core/i18n.js';
+import { isComplete } from '../core/coverage.js';
+import type { CoverageEntry } from '../core/coverage.js';
 import { C, log, todayISO } from '../core/terminal.js';
 import { VERSION, stalenessNotice } from '../core/version.js';
 
@@ -47,6 +49,13 @@ const REPORT_STEM: Record<Lang, string> = { en: 'vibeward-report', es: 'informe'
 /**
  * Bumped whenever the `--stdout` payload changes shape. Agents can rely on it.
  *
+ * 4 — a `coverage` block. The markdown report has always distinguished "checked and clean"
+ * from "never looked at"; the payload did not, so an agent reading `--stdout` — which is the
+ * documented way for an agent to read a scan — could not tell a passive run over a Supabase
+ * app from a full one that found nothing. It reported the second. Absence of a finding is
+ * only evidence of safety for the areas in `coverage.checked`, and `coverage.complete` is
+ * false whenever anything was skipped.
+ *
  * 3 — a `lang` key, and the prose of every finding written in that language. An agent that
  * summarises `why` for a user now needs to know which language it is holding, and the `es`
  * overlay is applied and dropped before serialising, so no finding ever carries both.
@@ -56,7 +65,7 @@ const REPORT_STEM: Record<Lang, string> = { en: 'vibeward-report', es: 'informe'
  * person needs is in `why`. Unrelated to the `schemaVersion` in `vibeward.json`, which is
  * the config format and is still 1.
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 /**
  * Writes every byte to stdout before returning, then the caller may exit.
@@ -98,7 +107,7 @@ export function finish(
   target: string,
   findings: Finding[],
   rls: RlsResult | null,
-  scanned: CoverageLine[],
+  scanned: CoverageEntry[],
   opts: FinishOptions,
   extras: FinishExtras = {},
 ): never {
@@ -113,7 +122,7 @@ export function finish(
     finding: localize(s.finding, lang),
   }));
 
-  const { markdown, counts, webCounts, verdict } = buildReport({
+  const { markdown, counts, webCounts, verdict, webCoverage } = buildReport({
     target,
     dateISO,
     findings: localized,
@@ -127,6 +136,20 @@ export function finish(
     notApplicable: extras.notApplicable,
     notEvaluated: extras.notEvaluated,
     configPath: extras.configPath,
+  });
+
+  const rows = (
+    entries: CoverageEntry[],
+    status: CoverageEntry['status'],
+  ): { id: string; detail: string }[] =>
+    entries
+      .filter((e) => e.status === status)
+      .map((e) => ({ id: e.id, detail: coverageText(e.detail, lang) }));
+
+  const group = (entries: CoverageEntry[]) => ({
+    checked: rows(entries, 'checked'),
+    notEvaluated: rows(entries, 'not_evaluated'),
+    notApplicable: rows(entries, 'not_applicable'),
   });
 
   const payload = {
@@ -150,6 +173,25 @@ export function finish(
       reason: s.reason,
     })),
     configPath: extras.configPath ?? null,
+    /**
+     * What this scan looked at, and what it did not.
+     *
+     * Without it, `findings: []` has two readings — "checked and clean" and "never looked" —
+     * and an agent summarising the payload has no way to pick the right one, so it picks the
+     * reassuring one. `complete: false` means at least one area in `notEvaluated` was skipped,
+     * and no statement about it can be drawn from this report.
+     */
+    coverage: {
+      // Security areas only, mirroring `counts` vs `webCounts`. A crawl that reached one page
+      // cannot judge duplicate titles, and on a single-page site that is most of the website
+      // list — folding those in would leave `complete` false on nearly every run, and a flag
+      // that is always false is a flag nobody reads. It is a statement about the security
+      // verdict's coverage, which is the only verdict this payload gates anything on.
+      complete: isComplete(scanned),
+      ...group(scanned),
+      /** The website pass, per check, on its own scale — it never moves `complete`. */
+      webChecks: group(webCoverage),
+    },
     rls,
   };
 
@@ -191,6 +233,15 @@ export function finish(
   if (fingerprint) {
     const { score, total } = fingerprint;
     log(`  ${C.dim}Vibe-coded fingerprint: ${score}/${total}${C.reset}`);
+  }
+
+  // Printed with the counts, not after the report path: a reader who stops at the summary is
+  // exactly the reader who would otherwise take a short findings list as a clean bill.
+  const gaps = scanned.filter((e) => e.status === 'not_evaluated');
+  if (gaps.length > 0) {
+    log(
+      `  ${C.yellow}◐ Not evaluated: ${gaps.length}${C.reset} ${C.dim}(see the report)${C.reset}`,
+    );
   }
 
   const vColor = counts.critical > 0 ? C.red : counts.high > 0 ? C.yellow : C.green;

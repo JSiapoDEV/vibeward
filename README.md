@@ -45,7 +45,7 @@ what it should do next.
 
 1. **Detects**, deterministically and with no LLM call anywhere — **25 security rules** and
    **19 website checks** over a deployed site or a code folder, plus **8 intent rules** over
-   natural language in **English, Spanish and Portuguese**, held to **751 assertions**.
+   natural language in **English, Spanish and Portuguese**, held to **770 assertions**.
 2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
 3. **Warns first**, through editor hooks, at the moments risk enters the system.
 
@@ -87,7 +87,7 @@ worth more than either tool's feature list.
 **Built with Claude Code**, which is worth saying out loud in a project whose subject is the code
 AI agents produce. The objection is obvious and fair: a security tool written by an agent is
 exactly the kind of thing this tool exists to be suspicious of. That is why every rule is
-deterministic and readable in this repository, why there are **751 assertions** including corpora
+deterministic and readable in this repository, why there are **770 assertions** including corpora
 of harmless input built specifically to make the rules misfire, and why the release notes lead
 with false positives rather than features. [`METHODOLOGY.md`](METHODOLOGY.md) states what those
 numbers were measured against, what they do not cover, and how to reproduce every one of them from
@@ -469,6 +469,30 @@ vibeward https://client-app.lovable.app --json --stdout --yes
 The JSON payload goes to **stdout** and every human-facing line to **stderr**, so it pipes straight
 into a parser. No colors, no prompts, and no report files unless you pass `--out`. The payload
 carries a `schemaVersion` — if the shape ever changes, that number changes with it.
+
+**An empty `findings` list is not a clean bill of health, and the payload says which one it is.**
+Every run carries a `coverage` block naming what was checked and what was not:
+
+```json
+"coverage": {
+  "complete": false,
+  "checked":       [{ "id": "http_headers",   "detail": "HTTP security headers (CSP, HSTS, …)" }],
+  "notEvaluated":  [{ "id": "supabase_rls",   "detail": "--passive: a Supabase backend was detected and its data API was never read" }],
+  "notApplicable": [{ "id": "firebase_rules", "detail": "no Firebase configuration was found in the served assets" }],
+  "webChecks": { "checked": [], "notEvaluated": [], "notApplicable": [] }
+}
+```
+
+`complete` is `false` whenever anything in `notEvaluated` was skipped — by a flag, by a declined
+probe, or because the input was not there. Nothing in that list may be read as a pass in either
+direction: a `--passive` scan over a Supabase app reports zero findings and an unevaluated
+database, and those are two facts, not one. `notApplicable` is the other case entirely — the area
+cannot exist on this target, so there was nothing to miss. `webChecks` is the same three lists for
+the website pass, on its own scale; it never moves `complete`, because a missing alt-text check
+says nothing about whether the app is safe.
+
+The same split is in the markdown report, under **Coverage** → *Verified automatically* and
+*Not verified in this run*.
 
 ### Deep Supabase audit without giving away credentials
 

@@ -75,6 +75,9 @@ export interface ReportStrings {
   coverageTitle: string;
   coverageBlurb: string;
   verifiedAutomatically: string;
+  nothingVerified: string;
+  notVerifiedTitle: string;
+  notVerifiedBlurb: string;
   playwrightNote: string;
   nextStepsTitle: string;
   nextStepsCritical: string;
@@ -170,6 +173,10 @@ const EN: ReportStrings = {
   coverageBlurb:
     'This automated analysis covers what is verifiable from the outside. Items that require server access (authorization, input validation, rate limiting, backups) are covered by the manual part of the audit.',
   verifiedAutomatically: 'Verified automatically',
+  nothingVerified: '_Nothing was verified in this run._',
+  notVerifiedTitle: 'Not verified in this run',
+  notVerifiedBlurb:
+    'These were **not** checked, so nothing above says anything about them. A clean report covers the list above and only that list.',
   playwrightNote:
     '> Browser console errors were **not** inspected: Playwright is not installed. Install it (`npm i -D playwright && npx playwright install chromium`) and re-run to include runtime errors.',
   nextStepsTitle: 'Recommended next steps',
@@ -272,6 +279,10 @@ const ES: ReportStrings = {
   coverageBlurb:
     'Este análisis automatizado cubre lo que se puede verificar desde fuera. Lo que exige acceso al servidor (autorización, validación de entradas, límites de tasa, copias de seguridad) corresponde a la parte manual de la auditoría.',
   verifiedAutomatically: 'Verificado automáticamente',
+  nothingVerified: '_En esta ejecución no se verificó nada._',
+  notVerifiedTitle: 'Sin verificar en esta ejecución',
+  notVerifiedBlurb:
+    'Esto **no** se comprobó, así que nada de lo anterior dice nada al respecto. Un informe limpio cubre la lista de arriba y solo esa lista.',
   playwrightNote:
     '> Los errores de consola del navegador **no** se inspeccionaron: Playwright no está instalado. Instálalo (`npm i -D playwright && npx playwright install chromium`) y vuelve a ejecutar para incluir los errores en tiempo de ejecución.',
   nextStepsTitle: 'Siguientes pasos recomendados',

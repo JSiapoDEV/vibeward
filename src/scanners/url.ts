@@ -15,7 +15,7 @@ import type { FirebaseConfig } from '../checks/firebase.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { applySuppressions, loadConfig, notApplicableChecks } from '../core/config.js';
 import { C, confirm, log, write, normalizeUrl } from '../core/terminal.js';
-import { coverage } from '../core/i18n.js';
+import { AREA, ledger } from '../core/coverage.js';
 import type { CoverageLine } from '../core/i18n.js';
 import type { Args } from '../core/args.js';
 import type { Finding, SuppressedFinding, SupabaseConfig } from '../core/types.js';
@@ -33,7 +33,7 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
   }
 
   const findings: Finding[] = [];
-  const scanned: CoverageLine[] = [];
+  const cov = ledger();
 
   /**
    * The authorization question, asked at the moment the scan stops being a browser.
@@ -77,15 +77,9 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     log('');
     if (!probeOk) {
       log(`${C.yellow}Skipping the backend probes. The rest of the report stands.${C.reset}`);
-      // Recorded, not silently dropped: a report that omitted this would read as "the
-      // backend was checked and was fine".
-      scanned.push(
-        coverage(
-          `Backend probes declined at the prompt — ${service} was detected but never tested`,
-          `Sondas al backend rechazadas en el prompt — se detectó ${service} pero no se probó`,
-        ),
-      );
     }
+    // The decline is recorded by the caller, against the areas it actually cost. Recording it
+    // here would file one prose line for a prompt that gates two different backends.
     return probeOk;
   };
 
@@ -98,11 +92,10 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     process.exit(1);
   }
   log(` ${C.green}ok${C.reset} (${mainPage.status})`);
-  scanned.push(
-    coverage(
-      'HTTP security headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)',
-      'Cabeceras de seguridad HTTP (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)',
-    ),
+  cov.checked(
+    AREA.httpHeaders,
+    'HTTP security headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)',
+    'Cabeceras de seguridad HTTP (CSP, HSTS, X-Frame-Options, X-Content-Type-Options)',
   );
   findings.push(...checkHeaders(mainPage.headers));
 
@@ -115,11 +108,10 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
       ? ` ${C.yellow}served over HTTP${C.reset}`
       : ` ${C.green}ok${C.reset} (redirects to HTTPS or refuses)`,
   );
-  scanned.push(
-    coverage(
-      'HTTP→HTTPS redirect (whether the site answers on plain http://)',
-      'Redirección HTTP→HTTPS (si el sitio responde en http:// plano)',
-    ),
+  cov.checked(
+    AREA.transport,
+    'HTTP→HTTPS redirect (whether the site answers on plain http://)',
+    'Redirección HTTP→HTTPS (si el sitio responde en http:// plano)',
   );
   if (plainHttp) findings.push(plainHttp);
 
@@ -169,17 +161,24 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
   }
   write(`${' '.repeat(90)}\r`);
   log(`${C.gray}▸ ${scannedBundles.size} bundle(s) scanned${C.reset}`);
-  scanned.push(
-    coverage(
-      `Exposed secrets/credentials in ${scannedBundles.size} JavaScript bundle(s)`,
-      `Secretos y credenciales expuestos en ${scannedBundles.size} bundle(s) de JavaScript`,
-    ),
+  cov.checked(
+    AREA.bundleSecrets,
+    `Exposed secrets/credentials in ${scannedBundles.size} JavaScript bundle(s)`,
+    `Secretos y credenciales expuestos en ${scannedBundles.size} bundle(s) de JavaScript`,
   );
-  scanned.push(
-    coverage(
-      'Exposed source maps (original source code downloadable from the URL)',
-      'Source maps expuestos (código fuente original descargable desde la URL)',
-    ),
+  // The queue stops at MAX_BUNDLES, so a large app can have code this scan never fetched.
+  // Silence there would read as "no secrets in the bundles" rather than "not all of them".
+  if (chunkQueue.length > 0) {
+    cov.notEvaluated(
+      AREA.bundleSecrets,
+      `${chunkQueue.length} further bundle(s) were left unread — the scan stops at ${MAX_BUNDLES}`,
+      `Quedaron ${chunkQueue.length} bundle(s) sin leer — el escaneo se detiene en ${MAX_BUNDLES}`,
+    );
+  }
+  cov.checked(
+    AREA.sourceMaps,
+    'Exposed source maps (original source code downloadable from the URL)',
+    'Source maps expuestos (código fuente original descargable desde la URL)',
   );
 
   // Website quality, AI visibility and the vibe-coded fingerprint. These are public GETs —
@@ -243,13 +242,31 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
         `${C.yellow}▸ ${suppressed.length} website finding(s) suppressed by vibeward.json${C.reset}`,
       );
     }
-    scanned.push(
-      coverage(
-        `Website quality & AI visibility across ${crawl.pages.length} page(s) — metadata, headings, ` +
-          `structured data, robots.txt/llms.txt/sitemap, 404 page, broken assets, JS weight`,
-        `Calidad del sitio y visibilidad ante las IA en ${crawl.pages.length} página(s) — metadatos, ` +
-          `encabezados, datos estructurados, robots.txt/llms.txt/sitemap, página 404, recursos rotos, peso del JS`,
-      ),
+    cov.checked(
+      AREA.websiteQuality,
+      `Website quality & AI visibility across ${crawl.pages.length} page(s) — metadata, headings, ` +
+        `structured data, robots.txt/llms.txt/sitemap, 404 page, broken assets, JS weight`,
+      `Calidad del sitio y visibilidad ante las IA en ${crawl.pages.length} página(s) — metadatos, ` +
+        `encabezados, datos estructurados, robots.txt/llms.txt/sitemap, página 404, recursos rotos, peso del JS`,
+    );
+    cov.checked(
+      AREA.pageSecrets,
+      `Inline scripts of ${crawl.pages.length} crawled page(s), for secrets the home page does not carry`,
+      `Scripts en línea de ${crawl.pages.length} página(s) rastreada(s), por secretos que no lleva la portada`,
+    );
+  } else {
+    // `--no-web` turns off the crawl, and the crawl is what reaches every page past the home
+    // page. Skipping the website checks is the flag's advertised effect; taking the secret
+    // scan of those pages with it is not, so it is recorded rather than assumed understood.
+    cov.notEvaluated(
+      AREA.websiteQuality,
+      '--no-web: the website quality and AI-visibility checks were not run',
+      '--no-web: no se ejecutaron las comprobaciones de calidad del sitio ni de visibilidad ante las IA',
+    );
+    cov.notEvaluated(
+      AREA.pageSecrets,
+      '--no-web: no pages beyond the home page were crawled, so their inline scripts went unscanned',
+      '--no-web: no se rastreó ninguna página más allá de la portada, así que sus scripts en línea quedaron sin analizar',
     );
   }
 
@@ -262,68 +279,115 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     );
   }
 
+  // Every path out of here writes a row. A backend that was detected and not probed is the
+  // single most consequential thing this scan can fail to say: the report that omits it is
+  // the report someone reads as "my Supabase is fine".
+  const supabaseSkipped = (en: string, es: string): void => {
+    cov.notEvaluated(AREA.supabaseRls, en, es);
+    cov.notEvaluated(AREA.supabaseGraphql, en, es);
+  };
+
   let rls: RlsResult | null = null;
-  if (
-    doActive &&
-    !args.noRls &&
-    supabaseCfg?.projectUrl &&
-    supabaseCfg.anonKey &&
-    (await confirmProbe('Supabase', `${supabaseCfg.projectUrl}/rest/v1/`))
-  ) {
+  const supabaseReady = Boolean(supabaseCfg?.projectUrl && supabaseCfg.anonKey);
+  if (!supabaseReady) {
+    // No backend to probe, so nothing was missed. This is the one branch that may claim
+    // `not_applicable`, and only because the assets were read and carried no config.
+    cov.notApplicable(
+      AREA.supabaseRls,
+      'no Supabase project URL and public key were found in the served assets',
+      'no se encontró una URL de proyecto de Supabase con clave pública en los recursos servidos',
+    );
+    cov.notApplicable(
+      AREA.supabaseGraphql,
+      'no Supabase project URL and public key were found in the served assets',
+      'no se encontró una URL de proyecto de Supabase con clave pública en los recursos servidos',
+    );
+    if (doActive && !args.noRls) {
+      log(`${C.gray}▸ No Supabase key detected. Skipping RLS/GraphQL probe.${C.reset}`);
+    }
+  } else if (args.noRls) {
+    supabaseSkipped(
+      '--no-rls: a Supabase backend was detected and its Row-Level Security was never tested',
+      '--no-rls: se detectó un backend de Supabase y nunca se comprobó su Row-Level Security',
+    );
+  } else if (args.passive) {
+    supabaseSkipped(
+      '--passive: a Supabase backend was detected and its data API was never read',
+      '--passive: se detectó un backend de Supabase y nunca se leyó su API de datos',
+    );
+  } else if (!(await confirmProbe('Supabase', `${supabaseCfg!.projectUrl}/rest/v1/`))) {
+    supabaseSkipped(
+      'backend probes declined at the prompt — Supabase was detected but never tested',
+      'sondas al backend rechazadas en el prompt — se detectó Supabase pero no se probó',
+    );
+  } else {
     write(`${C.gray}▸ Enumerating tables & probing Row Level Security…${C.reset}`);
-    rls = await probeRLS(supabaseCfg.projectUrl, supabaseCfg.anonKey, {
+    rls = await probeRLS(supabaseCfg!.projectUrl, supabaseCfg!.anonKey!, {
       writeTest: args.writeTest,
     });
     log(` ${C.green}done${C.reset} (${rls.enumerated} enumerated, ${rls.probed} probed)`);
-    scanned.push(
-      coverage(
-        `Supabase RLS — ${rls.probed} tables probed (${rls.enumerated} enumerated live)${args.writeTest ? ', write access tested' : ''}`,
-        `RLS de Supabase — ${rls.probed} tablas probadas (${rls.enumerated} enumeradas en vivo)${args.writeTest ? ', acceso de escritura comprobado' : ''}`,
-      ),
+    cov.checked(
+      AREA.supabaseRls,
+      `Supabase RLS — ${rls.probed} tables probed (${rls.enumerated} enumerated live)${args.writeTest ? ', write access tested' : ''}`,
+      `RLS de Supabase — ${rls.probed} tablas probadas (${rls.enumerated} enumeradas en vivo)${args.writeTest ? ', acceso de escritura comprobado' : ''}`,
     );
+    // Enumeration is best-effort: when the project does not serve a table list, the probe
+    // falls back to a list of common names. Tables outside it were never asked about, and a
+    // reader has to know the sweep was a guess before drawing anything from a clean result.
+    if (rls.enumerated === 0) {
+      cov.notEvaluated(
+        AREA.supabaseRls,
+        `the project did not expose a table list — only ${rls.probed} common table names were tried, so any table outside that list is untested`,
+        `el proyecto no expuso una lista de tablas — solo se probaron ${rls.probed} nombres habituales, así que cualquier tabla fuera de esa lista queda sin comprobar`,
+      );
+    }
     findings.push(...rlsFindings(rls));
 
     write(`${C.gray}▸ Checking GraphQL introspection…${C.reset}`);
-    const gql = await checkGraphqlIntrospection(supabaseCfg.projectUrl, supabaseCfg.anonKey);
+    const gql = await checkGraphqlIntrospection(supabaseCfg!.projectUrl, supabaseCfg!.anonKey!);
     log(` ${C.green}done${C.reset}`);
-    scanned.push(
-      coverage(
-        'Supabase GraphQL introspection exposure',
-        'Exposición de la introspección GraphQL de Supabase',
-      ),
+    cov.checked(
+      AREA.supabaseGraphql,
+      'Supabase GraphQL introspection exposure',
+      'Exposición de la introspección GraphQL de Supabase',
     );
     if (gql) findings.push(gql);
-  } else if (doActive && !args.noRls && !supabaseCfg?.anonKey) {
-    // Only when there genuinely was no key. Saying it after a declined prompt would report
-    // "nothing to probe" for a backend the operator chose not to touch.
-    log(`${C.gray}▸ No Supabase key detected. Skipping RLS/GraphQL probe.${C.reset}`);
   }
 
-  if (doActive && firebaseCfg && (await confirmProbe('Firebase', firebaseTarget(firebaseCfg)))) {
+  if (!firebaseCfg) {
+    cov.notApplicable(
+      AREA.firebaseRules,
+      'no Firebase configuration was found in the served assets',
+      'no se encontró configuración de Firebase en los recursos servidos',
+    );
+  } else if (args.passive) {
+    cov.notEvaluated(
+      AREA.firebaseRules,
+      '--passive: a Firebase backend was detected and its database and storage rules were never tested',
+      '--passive: se detectó un backend de Firebase y nunca se comprobaron sus reglas de base de datos y almacenamiento',
+    );
+  } else if (!(await confirmProbe('Firebase', firebaseTarget(firebaseCfg)))) {
+    cov.notEvaluated(
+      AREA.firebaseRules,
+      'backend probes declined at the prompt — Firebase was detected but never tested',
+      'sondas al backend rechazadas en el prompt — se detectó Firebase pero no se probó',
+    );
+  } else {
     log(`${C.gray}▸ Probing Firebase RTDB & Storage…${C.reset}`);
     findings.push(...(await checkFirebase(firebaseCfg)));
-    scanned.push(
-      coverage(
-        'Firebase Realtime Database and Storage bucket exposure',
-        'Exposición de Firebase Realtime Database y del bucket de Storage',
-      ),
-    );
-  } else if (args.passive && (firebaseCfg || supabaseCfg?.anonKey)) {
-    scanned.push(
-      coverage(
-        'Detected a Supabase/Firebase config (not probed — passive mode)',
-        'Se detectó una configuración de Supabase/Firebase (no se probó — modo pasivo)',
-      ),
+    cov.checked(
+      AREA.firebaseRules,
+      'Firebase Realtime Database and Storage bucket exposure',
+      'Exposición de Firebase Realtime Database y del bucket de Storage',
     );
   }
 
   if (args.supabaseJson) {
     findings.push(...loadSupabaseExport(args.supabaseJson));
-    scanned.push(
-      coverage(
-        'Live Supabase audit export (--supabase)',
-        'Export de auditoría de Supabase (--supabase)',
-      ),
+    cov.checked(
+      AREA.supabaseExport,
+      'Live Supabase audit export (--supabase)',
+      'Export de auditoría de Supabase (--supabase)',
     );
   }
 
@@ -331,7 +395,7 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     target,
     findings,
     rls,
-    scanned,
+    cov.entries(),
     { ...args, active: doActive },
     {
       fingerprint,

@@ -47,6 +47,14 @@ import {
 } from '../src/http/crawl.js';
 import type { SiteFiles } from '../src/http/crawl.js';
 import { coverage, localize, localizeFingerprint } from '../src/core/i18n.js';
+import type { CoverageEntry } from '../src/core/coverage.js';
+
+/** A one-line `checked` ledger row, for the report tests that only need the list non-empty. */
+const covered = (en: string, es: string): CoverageEntry => ({
+  id: 'test_area',
+  status: 'checked',
+  detail: coverage(en, es),
+});
 import type { Finding } from '../src/core/types.js';
 import { parseConfig, applySuppressions, notApplicableChecks } from '../src/core/config.js';
 import {
@@ -308,9 +316,9 @@ console.log('\n4. Report generation');
       allResults: [],
     },
     scanned: [
-      coverage('Headers', 'Cabeceras'),
-      coverage('Secrets', 'Secretos'),
-      coverage('RLS', 'RLS'),
+      covered('Headers', 'Cabeceras'),
+      covered('Secrets', 'Secretos'),
+      covered('RLS', 'RLS'),
     ],
     lang: 'en',
   });
@@ -1001,7 +1009,7 @@ console.log('\n24. Isolation — website findings never gate security');
     dateISO: '2026-08-14',
     findings: [secCritical, webMedium, webHigh],
     rls: null,
-    scanned: [coverage('test', 'prueba')],
+    scanned: [covered('test', 'prueba')],
     lang: 'en',
   });
   assert(mixed.counts.critical === 1, 'security counts include the security finding');
@@ -1023,7 +1031,7 @@ console.log('\n24. Isolation — website findings never gate security');
     dateISO: '2026-08-14',
     findings: [webMedium, webHigh],
     rls: null,
-    scanned: [coverage('test', 'prueba')],
+    scanned: [covered('test', 'prueba')],
     lang: 'en',
   });
   assert(
@@ -1185,7 +1193,7 @@ console.log('\n26. vibeward.json — declared intent and suppressions');
     dateISO: '2026-08-14',
     findings: [],
     rls: null,
-    scanned: [coverage('test', 'prueba')],
+    scanned: [covered('test', 'prueba')],
     lang: 'en',
     suppressed: split.suppressed,
     configPath: '/repo/vibeward.json',
@@ -1263,7 +1271,7 @@ console.log('\n26. vibeward.json — declared intent and suppressions');
         { id: 'web_missing_lang', label: 'No lang', severity: 'medium', kind: 'web', why: 'w' },
       ],
       rls: null,
-      scanned: [coverage('test', 'prueba')],
+      scanned: [covered('test', 'prueba')],
       lang: 'en',
       notApplicable: internal,
     }).markdown;
@@ -1568,7 +1576,7 @@ console.log('\n31. Website — a check with nothing to measure is not a check th
     dateISO: '2026-08-16',
     findings: [],
     rls: null,
-    scanned: [coverage('test', 'prueba')],
+    scanned: [covered('test', 'prueba')],
     lang: 'en',
     fingerprint: {
       host: 'x.test',
@@ -1612,7 +1620,7 @@ console.log('\n32. Report language — the same document in Spanish');
     dateISO: '2026-08-16',
     findings: findings.map((f) => localize(f, 'es')),
     rls: null,
-    scanned: [coverage('Headers', 'Cabeceras')],
+    scanned: [covered('Headers', 'Cabeceras')],
     lang: 'es',
   }).markdown;
 
@@ -1630,7 +1638,7 @@ console.log('\n32. Report language — the same document in Spanish');
     dateISO: '2026-08-16',
     findings,
     rls: null,
-    scanned: [coverage('Headers', 'Cabeceras')],
+    scanned: [covered('Headers', 'Cabeceras')],
     lang: 'en',
   }).markdown;
   assert(en.includes('Why it matters') && !en.includes('Por qué importa'), 'English stays English');
@@ -1643,7 +1651,7 @@ console.log('\n32. Report language — the same document in Spanish');
     dateISO: '2026-08-16',
     findings: [],
     rls: null,
-    scanned: [coverage('Headers', 'Cabeceras')],
+    scanned: [covered('Headers', 'Cabeceras')],
     lang: 'es',
     fingerprint: localizeFingerprint(fp, 'es'),
     notApplicable: notApplicableChecks({ schemaVersion: 1 }),
@@ -1677,7 +1685,7 @@ console.log('\n33. The report claims nothing about who authorized the scan');
     dateISO: '2026-08-16',
     findings: [],
     rls: null,
-    scanned: [coverage('test', 'prueba')],
+    scanned: [covered('test', 'prueba')],
     lang: 'en',
   }).markdown;
   // vibeward cannot know the operator's relationship to the site — only that somebody typed
@@ -1695,7 +1703,7 @@ console.log('\n33. The report claims nothing about who authorized the scan');
     dateISO: '2026-08-16',
     findings: [],
     rls: null,
-    scanned: [coverage('test', 'prueba')],
+    scanned: [covered('test', 'prueba')],
     lang: 'en',
     active: false,
   }).markdown;
@@ -1706,7 +1714,7 @@ console.log('\n33. The report claims nothing about who authorized the scan');
       dateISO: '2026-08-16',
       findings: [],
       rls: null,
-      scanned: [coverage('test', 'prueba')],
+      scanned: [covered('test', 'prueba')],
       lang: 'en',
       active: true,
     }).markdown.includes('read-only'),

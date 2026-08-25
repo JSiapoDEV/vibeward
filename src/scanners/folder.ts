@@ -5,8 +5,8 @@ import { scanBackendFile } from '../checks/backend.js';
 import { analyzeMigrations } from '../checks/migrations.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { C, log } from '../core/terminal.js';
-import { coverage } from '../core/i18n.js';
-import type { CoverageLine } from '../core/i18n.js';
+import { AREA, ledger } from '../core/coverage.js';
+import type { CoverageEntry } from '../core/coverage.js';
 import type { Args } from '../core/args.js';
 import type { Finding } from '../core/types.js';
 
@@ -148,6 +148,77 @@ export function scanFolder(root: string): FolderScan {
   return { findings, filesScanned, migrations, supabaseContext };
 }
 
+/**
+ * What a folder scan looked at, decided from the tree it actually walked.
+ *
+ * Pure and separate from `runFolderScan` so the decisions can be asserted: which of these
+ * rows is a `checked` and which is a `not_evaluated` is the whole difference between a report
+ * that means something and one that only looks like it does.
+ */
+export function folderCoverage(input: {
+  dir: string;
+  filesScanned: number;
+  migrations: number;
+  supabaseContext: boolean;
+  supabaseExport: boolean;
+}): CoverageEntry[] {
+  const { dir, filesScanned, migrations, supabaseContext, supabaseExport } = input;
+  const cov = ledger();
+  cov.checked(
+    AREA.sourceSecrets,
+    `Secrets and committed environment files across ${filesScanned} source file(s) in ${dir}`,
+    `Secretos y ficheros de entorno commiteados en ${filesScanned} fichero(s) fuente de ${dir}`,
+  );
+  cov.checked(
+    AREA.backendAuthz,
+    'Next.js security headers, server-action authorization and formula injection in the same files',
+    'Cabeceras de seguridad de Next.js, autorización en server actions e inyección de fórmulas en esos mismos ficheros',
+  );
+
+  if (migrations > 0) {
+    cov.checked(
+      AREA.sqlMigrations,
+      `Supabase/SQL migrations in ${migrations} file(s) (RLS, permissive policies, SECURITY DEFINER, anon grants)`,
+      `Migraciones de Supabase/SQL en ${migrations} fichero(s) (RLS, políticas permisivas, SECURITY DEFINER, permisos a anon)`,
+    );
+  } else if (supabaseContext) {
+    // The loudest silence this scanner had. A Supabase project whose schema is managed in the
+    // dashboard, or whose migrations live in another repository, has no .sql here — so every
+    // RLS rule finds nothing and the report comes back clean on the exact surface that
+    // CVE-2025-48757 is about. Nothing was checked; that has to be what it says.
+    cov.notEvaluated(
+      AREA.sqlMigrations,
+      'this looks like a Supabase project but no .sql migration files were found — RLS, policies and SECURITY DEFINER were never examined. Schema managed in the dashboard is invisible here; scan the live URL, or export it with `vibeward supabase-sql`',
+      'esto parece un proyecto de Supabase pero no se encontró ningún fichero de migración .sql — RLS, políticas y SECURITY DEFINER no se examinaron. Un esquema gestionado desde el panel es invisible aquí; escanea la URL en vivo, o expórtalo con `vibeward supabase-sql`',
+    );
+  } else {
+    cov.notApplicable(
+      AREA.sqlMigrations,
+      'no .sql files in the tree and nothing identifying this as a Supabase project',
+      'no hay ficheros .sql en el árbol ni nada que identifique esto como un proyecto de Supabase',
+    );
+  }
+
+  if (supabaseExport) {
+    cov.checked(
+      AREA.supabaseExport,
+      'Live Supabase audit export (--supabase)',
+      'Export de auditoría de Supabase (--supabase)',
+    );
+  }
+
+  // A folder scan touches no network and no live data at all, whatever flags were passed. The
+  // deployed app is therefore entirely outside what this run can speak to — said here rather
+  // than left for the reader to infer from the absence of a database section.
+  cov.notEvaluated(
+    AREA.supabaseRls,
+    'a folder scan reads files and never contacts the live backend — the deployed database was not probed. Scan the URL to cover it',
+    'un escaneo de carpeta lee ficheros y nunca contacta con el backend en vivo — no se sondeó la base de datos desplegada. Escanea la URL para cubrirlo',
+  );
+
+  return cov.entries();
+}
+
 /** White-box: scan a local folder (code + Supabase migrations) plus an optional export. */
 export function runFolderScan(dir: string, args: Args): never {
   log(`${C.gray}▸ Scanning folder ${dir}…${C.reset}`);
@@ -155,32 +226,17 @@ export function runFolderScan(dir: string, args: Args): never {
   log(
     `${C.gray}▸ ${filesScanned} file(s) scanned, ${migrations.length} SQL file(s) found${C.reset}`,
   );
-  const scanned: CoverageLine[] = [
-    coverage(
-      `Source files in ${dir} (secrets, committed .env, Next.js headers, server-action auth, formula injection)`,
-      `Ficheros fuente en ${dir} (secretos, .env commiteado, cabeceras de Next.js, autorización en server actions, inyección de fórmulas)`,
-    ),
-  ];
 
-  if (migrations.length) {
-    findings.push(...analyzeMigrations(migrations, { supabaseContext }));
-    scanned.push(
-      coverage(
-        `Supabase/SQL migrations (RLS, permissive policies, SECURITY DEFINER, anon grants)`,
-        `Migraciones de Supabase/SQL (RLS, políticas permisivas, SECURITY DEFINER, permisos a anon)`,
-      ),
-    );
-  }
-  if (args.supabaseJson) {
-    findings.push(...loadSupabaseExport(args.supabaseJson));
-    scanned.push(
-      coverage(
-        'Live Supabase audit export (--supabase)',
-        'Export de auditoría de Supabase (--supabase)',
-      ),
-    );
-  }
+  if (migrations.length) findings.push(...analyzeMigrations(migrations, { supabaseContext }));
+  if (args.supabaseJson) findings.push(...loadSupabaseExport(args.supabaseJson));
 
-  // A folder scan touches no network and no live data at all, whatever flags were passed.
+  const scanned = folderCoverage({
+    dir,
+    filesScanned,
+    migrations: migrations.length,
+    supabaseContext,
+    supabaseExport: Boolean(args.supabaseJson),
+  });
+
   finish(dir, findings, null, scanned, { ...args, active: false });
 }

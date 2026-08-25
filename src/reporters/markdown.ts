@@ -1,7 +1,8 @@
 import { isWeb } from '../core/types.js';
 import type { Finding, Severity, SuppressedFinding } from '../core/types.js';
-import { coverageText } from '../core/i18n.js';
+import { coverage, coverageText } from '../core/i18n.js';
 import type { CoverageLine, Lang } from '../core/i18n.js';
+import type { CoverageEntry } from '../core/coverage.js';
 import { VERSION } from '../core/version.js';
 import { REPORT } from './strings.js';
 import type { RlsResult } from '../checks/supabase.js';
@@ -18,7 +19,7 @@ export interface ReportInput {
   /** Findings already localized — `finish` translates once, for every output format. */
   findings: Finding[];
   rls: RlsResult | null;
-  scanned: CoverageLine[];
+  scanned: CoverageEntry[];
   /** Which language the report prose is written in. */
   lang: Lang;
   /** False in `--passive`, where nothing beyond public assets was requested. */
@@ -44,6 +45,15 @@ export interface ReportOutput {
   webCounts: SeverityCounts;
   verdict: string;
   totalCrit: number;
+  /**
+   * Per-check state of the website pass, computed once and handed to whoever needs it.
+   *
+   * The report table and the JSON payload used to be free to disagree about whether a check
+   * passed, because each worked it out for itself and only the table was ever read by a
+   * person. Returning it from the one place that derives it makes them the same answer by
+   * construction rather than by review.
+   */
+  webCoverage: CoverageEntry[];
 }
 
 function tally(findings: Finding[]): SeverityCounts {
@@ -54,6 +64,53 @@ function tally(findings: Finding[]): SeverityCounts {
 
 /** Checks that need a real browser, so they cannot be claimed as passing without one. */
 const NEEDS_BROWSER = new Set(['web_console_errors']);
+
+/**
+ * Why a website check produced no verdict, or `null` when it genuinely ran.
+ *
+ * Three states the report must never blur: "we had nothing to measure" is not "ok", "it does
+ * not apply here" is not "we checked", and a check that ran and failed still *ran*. A check
+ * silenced by config is absent from this map on purpose — it was evaluated, it failed, and
+ * hiding it is what the `suppressed` list exists to disclose. Folding it in here would let a
+ * config file convert a failure into "not evaluated", which is the one edit that would make
+ * the coverage record lie.
+ */
+function webCheckSkip(
+  id: string,
+  consoleChecked: boolean | undefined,
+  notApplicable: Map<string, CoverageLine>,
+  notEvaluated: Map<string, CoverageLine>,
+): { status: CoverageEntry['status']; detail: CoverageLine } | null {
+  if (consoleChecked === false && NEEDS_BROWSER.has(id)) {
+    return { status: 'not_evaluated', detail: coverage(REPORT.en.noBrowser, REPORT.es.noBrowser) };
+  }
+  const blind = notEvaluated.get(id);
+  if (blind) return { status: 'not_evaluated', detail: blind };
+  const declared = notApplicable.get(id);
+  if (declared) return { status: 'not_applicable', detail: declared };
+  return null;
+}
+
+/**
+ * One coverage row per website check, from the same derivation the report table renders.
+ *
+ * Exported so `finish` can put it in the JSON payload without re-deriving it. The website
+ * checks are the one family where the ledger is per check rather than per area, because they
+ * are the one family that skips per check: a crawl that reached a single page cannot judge
+ * duplicate titles, and a page with no images cannot be missing alt text.
+ */
+export function webCheckCoverage(
+  consoleChecked: boolean | undefined,
+  notApplicable: Map<string, CoverageLine>,
+  notEvaluated: Map<string, CoverageLine>,
+): CoverageEntry[] {
+  return WEB_CHECKS.map((c) => {
+    const skipped = webCheckSkip(c.id, consoleChecked, notApplicable, notEvaluated);
+    return skipped
+      ? { id: c.id, status: skipped.status, detail: skipped.detail }
+      : { id: c.id, status: 'checked' as const, detail: coverage(c.label, c.es) };
+  });
+}
 
 /**
  * The config's file name, never its path. The report is handed to a client: the auditor's
@@ -78,18 +135,13 @@ function webSection(
   const found = new Map(web.map((f) => [f.id, f]));
   const silenced = new Map(suppressed.map((s) => [s.finding.id, s]));
 
-  // Four states, and the report must never blur them: "we had nothing to measure" is not
-  // "ok", "it does not apply here" is not "we checked", and "you told us to ignore it" is
-  // not "it passed". Only the fourth is a pass.
+  // "You told us to ignore it" is a fourth state, handled below against `silenced` — it is
+  // not a coverage state, because a suppressed check ran and failed.
   const skip = (id: string): { status: string; reason: string } | null => {
-    if (consoleChecked === false && NEEDS_BROWSER.has(id)) {
-      return { status: t.statusNotEvaluated, reason: t.noBrowser };
-    }
-    const blind = notEvaluated.get(id);
-    if (blind) return { status: t.statusNotEvaluated, reason: coverageText(blind, lang) };
-    const declared = notApplicable.get(id);
-    if (declared) return { status: t.statusNotApplicable, reason: coverageText(declared, lang) };
-    return null;
+    const s = webCheckSkip(id, consoleChecked, notApplicable, notEvaluated);
+    if (!s) return null;
+    const status = s.status === 'not_evaluated' ? t.statusNotEvaluated : t.statusNotApplicable;
+    return { status, reason: coverageText(s.detail, lang) };
   };
 
   const passed = WEB_CHECKS.filter(
@@ -293,7 +345,30 @@ export function buildReport({
   md += `## ${t.coverageTitle}\n\n`;
   md += `${t.coverageBlurb}\n\n`;
   md += `### ${t.verifiedAutomatically}\n`;
-  for (const line of scanned) md += `- ${coverageText(line, lang)}\n`;
+  const verified = scanned.filter((e) => e.status === 'checked');
+  if (verified.length === 0) md += `${t.nothingVerified}\n`;
+  for (const e of verified) md += `- ${coverageText(e.detail, lang)}\n`;
+
+  // The gaps, under their own heading rather than mixed into the list above. They used to be
+  // pushed into the same array and printed under "Verified automatically", so a declined
+  // backend probe was rendered as something the scan had verified — the precise inversion
+  // this section exists to prevent.
+  const gaps = scanned.filter((e) => e.status !== 'checked');
+  if (gaps.length > 0) {
+    md += `\n### ${t.notVerifiedTitle}\n\n`;
+    md += `${t.notVerifiedBlurb}\n\n`;
+    // One prompt gates two areas, so declining it produces two rows carrying the same
+    // sentence. They stay separate in the payload, where the ids are what an agent reads;
+    // printing the sentence twice to a person just looks like a bug.
+    const seen = new Set<string>();
+    for (const e of gaps) {
+      const text = coverageText(e.detail, lang);
+      if (seen.has(text)) continue;
+      seen.add(text);
+      const mark = e.status === 'not_evaluated' ? t.statusNotEvaluated : t.statusNotApplicable;
+      md += `- ${mark} — ${text}\n`;
+    }
+  }
   if (hasWeb && consoleChecked === false) md += `\n${t.playwrightNote}\n`;
 
   md += `\n---\n\n## ${t.nextStepsTitle}\n\n`;
@@ -306,5 +381,12 @@ export function buildReport({
   // liability the moment it is forwarded to anyone.
   md += `${t.footer(VERSION)}\n`;
 
-  return { markdown: md, counts, webCounts, verdict, totalCrit };
+  return {
+    markdown: md,
+    counts,
+    webCounts,
+    verdict,
+    totalCrit,
+    webCoverage: hasWeb ? webCheckCoverage(consoleChecked, notApplicable, notEvaluated) : [],
+  };
 }
