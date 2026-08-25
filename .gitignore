@@ -26,3 +26,6 @@ dist/
 # .github/workflows/publish-plugin.yml.
 bin/
 skills/
+
+# Notas de trabajo, solo locales. No forman parte del proyecto publicado.
+plan/
