@@ -45,7 +45,7 @@ what it should do next.
 
 1. **Detects**, deterministically and with no LLM call anywhere — **25 security rules** and
    **19 website checks** over a deployed site or a code folder, plus **8 intent rules** over
-   natural language in **English, Spanish and Portuguese**, held to **770 assertions**.
+   natural language in **English, Spanish and Portuguese**, held to **782 assertions**.
 2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
 3. **Warns first**, through editor hooks, at the moments risk enters the system.
 
@@ -87,7 +87,7 @@ worth more than either tool's feature list.
 **Built with Claude Code**, which is worth saying out loud in a project whose subject is the code
 AI agents produce. The objection is obvious and fair: a security tool written by an agent is
 exactly the kind of thing this tool exists to be suspicious of. That is why every rule is
-deterministic and readable in this repository, why there are **770 assertions** including corpora
+deterministic and readable in this repository, why there are **782 assertions** including corpora
 of harmless input built specifically to make the rules misfire, and why the release notes lead
 with false positives rather than features. [`METHODOLOGY.md`](METHODOLOGY.md) states what those
 numbers were measured against, what they do not cover, and how to reproduce every one of them from
@@ -331,8 +331,8 @@ claude plugin marketplace add jsiapo-dev/plugins
 claude plugin install vibeward
 ```
 
-That is the whole install. The skill and all three guard moments come with it, nothing is written
-into your `settings.json`, and `/plugin uninstall vibeward` takes every trace back out.
+That is the whole install. All three skills and all three guard moments come with it, nothing is
+written into your `settings.json`, and `/plugin uninstall vibeward` takes every trace back out.
 
 The plugin carries its **own copy** of the CLI, so the guard that runs on the prompt you just
 typed resolves nothing from the network — 0.13 s against the 2.06 s a pinned `npx` costs even
@@ -346,6 +346,27 @@ free of generated files.
 
 While the plugin is enabled, `vibeward` is also on the Bash tool's `PATH`, at the same pinned
 version — so the agent can audit a URL without installing anything either.
+
+### Any SKILL.md agent: as skills
+
+```bash
+npx skills add JSiapoDEV/vibeward
+```
+
+Three skills, split by what you are actually asking for rather than by what the tool does — a
+host picks one by matching your request against its description, so a single skill covering
+everything is a skill that triggers on nothing in particular:
+
+| Skill | For |
+|---|---|
+| **`vibeward`** | "audit my site", "check this repo for leaked keys", "is my Supabase safe" — scan a URL or a folder, then report |
+| **`install-vibeward-guardrails`** | "stop Claude disabling RLS", "install the guardrail" — `init`, the hooks, and which editor enforces what |
+| **`ci-security-scanning-with-vibeward`** | "gate my pull requests", "add a secret check to CI" — the Action, SARIF, and the exit codes |
+
+They are generated from [`src/init/templates.ts`](src/init/templates.ts), not hand-written, so
+they cannot drift from the tool they describe. The two setup skills are deliberately **not**
+written into your project by `init`: a repo that has just been set up has no use for the
+instructions for setting it up.
 
 ### Every other editor: `init`
 
@@ -379,8 +400,9 @@ whatever it detects in your repo:
   ◉ When the agent reads a page, file or tool result
 ```
 
-Each host gets one `SKILL.md` — the format is now shared, so the per-editor rule files
-(`.cursor/rules`, `.devin/rules`) are gone and there is one body of text instead of four.
+Each host gets one `SKILL.md` — the scan skill, and only it. The format is now shared, so the
+per-editor rule files (`.cursor/rules`, `.devin/rules`) are gone and there is one body of text
+instead of four.
 
 ### The three moments, and where each one actually works
 

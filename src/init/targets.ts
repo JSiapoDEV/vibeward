@@ -95,7 +95,9 @@ function hostTarget(host: Host): Target {
         {
           path: at(scope, cwd, home, relative),
           strategy: 'create',
-          render: skillFile,
+          // The scan skill, and only it. `skillFile` now takes an optional spec, so passing
+          // the bare reference would hand it the RenderContext as its spec.
+          render: () => skillFile(),
           kind: 'skill',
         },
       ];

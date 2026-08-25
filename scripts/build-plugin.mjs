@@ -56,10 +56,12 @@ const shim = ['#!/bin/sh', 'exec node "$(dirname "$0")/vibeward.mjs" "$@"', ''].
 writeFile('bin/vibeward', shim);
 chmodSync(join(root, 'bin/vibeward'), 0o755);
 
-// 3. The skill, from the same template `init` writes at every host. One source, seven
-//    destinations, and now an eighth.
-const { skillFile } = await import(join(root, 'dist/init/templates.js'));
-writeFile('skills/vibeward/SKILL.md', skillFile());
+// 3. The skills, from the same templates `init` writes at every host. `init` installs only the
+//    scan skill — a project that has just been set up does not need the instructions for
+//    setting it up — but the plugin and the `npx skills add` catalogue carry all of them,
+//    because that is where somebody who has installed nothing yet goes looking.
+const { SKILLS, skillFile } = await import(join(root, 'dist/init/templates.js'));
+for (const spec of SKILLS) writeFile(`skills/${spec.name}/SKILL.md`, skillFile(spec));
 
 // 4. The manifest version. The marketplace entry deliberately carries no `version`: Claude Code
 //    always reads plugin.json, so a second copy can only ever be the stale one.

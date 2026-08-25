@@ -11,7 +11,13 @@ import { analyzeMigrations } from '../src/checks/migrations.js';
 import { checkHeaders } from '../src/checks/headers.js';
 import { analyzeSupabaseExport } from '../src/checks/supabase.js';
 import { parseConfig, applySuppressions } from '../src/core/config.js';
-import { INSTRUCTION, skillFile, claudeMdBlock, agentsBlock } from '../src/init/templates.js';
+import {
+  INSTRUCTION,
+  SKILLS,
+  skillFile,
+  claudeMdBlock,
+  agentsBlock,
+} from '../src/init/templates.js';
 import { localize, coverage } from '../src/core/i18n.js';
 import { buildReport, webCheckCoverage } from '../src/reporters/markdown.js';
 import { folderCoverage } from '../src/scanners/folder.js';
@@ -362,11 +368,90 @@ console.log('\nContract — the installed instructions say so\n');
   // A plain YAML scalar ends at the first `: `, so a colon inside the description silently
   // truncates it — and the description is the only thing that decides whether the skill is
   // ever loaded. The key's own separator is fine; anything after it is not.
-  const description = /^description: (.*)$/m.exec(skillFile())?.[1] ?? '';
-  assert(description.length > 80, 'the skill declares a description');
+  //
+  // Asserted across every skill in the set, not just the first: the whole reason for shipping
+  // three is that a host picks one by matching its description, so a skill that ships with a
+  // broken or feeble description is a skill that silently never loads.
+  const untriggerable: string[] = [];
+  const truncated: string[] = [];
+  const unmarked: string[] = [];
+  const misnamed: string[] = [];
+  for (const spec of SKILLS) {
+    const file = skillFile(spec);
+    const description = /^description: (.*)$/m.exec(file)?.[1] ?? '';
+    if (description.length <= 80) untriggerable.push(spec.name);
+    // A plain YAML scalar ends at the first `: `, so a colon inside the description silently
+    // truncates it. The key's own separator is fine; anything after it is not.
+    if (description.includes(': ')) truncated.push(spec.name);
+    if (!/vibeward v\d+\.\d+\.\d+/.test(file)) unmarked.push(spec.name);
+    // `name` has to equal the directory `build-plugin.mjs` writes it into, and most hosts
+    // invoke from that directory rather than from this field.
+    if (!/^[a-z][a-z0-9-]*$/.test(spec.name)) misnamed.push(spec.name);
+    if (!new RegExp(`^name: ${spec.name}$`, 'm').test(file)) misnamed.push(spec.name);
+  }
+  assert(SKILLS.length >= 3, `the set ships every entry point (${SKILLS.length} skills)`);
   assert(
-    !description.includes(': '),
-    'the description has no colon-space, which would truncate it at load time',
+    new Set(SKILLS.map((s) => s.name)).size === SKILLS.length,
+    'no two skills share a name, which would collide in one skills/ directory',
+  );
+  assert(untriggerable.length === 0, `every skill declares a description — ${untriggerable}`);
+  assert(truncated.length === 0, `no description has a colon-space — ${truncated}`);
+  assert(unmarked.length === 0, `every skill carries the version mark — ${unmarked}`);
+  assert(misnamed.length === 0, `every skill name is a directory-safe slug — ${misnamed}`);
+
+  // The prohibition travels with every skill. The setup skills do not carry the full argument
+  // — that would be the duplication the templates exist to avoid — but an agent must not be
+  // able to reach one of them and find no statement of it at all.
+  const silent = SKILLS.filter((spec) => !/does not fix|do not fix|never fix/i.test(spec.body()));
+  assert(
+    silent.length === 0,
+    `every skill states that vibeward does not fix — ${silent.map((s) => s.name)}`,
+  );
+}
+
+console.log("\nContract — the setup skills do not act on the user's behalf\n");
+{
+  const install = SKILLS.find((s) => s.name === 'install-vibeward-guardrails')?.body() ?? '';
+  const ci = SKILLS.find((s) => s.name === 'ci-security-scanning-with-vibeward')?.body() ?? '';
+  assert(install.length > 500 && ci.length > 500, 'both setup skills have a real body');
+
+  // `init` writes into somebody's repository and their editor config. An agent that picks the
+  // targets itself has edited a project nobody asked it to edit — the behaviour vibeward
+  // exists to catch, committed by the tool's own instructions.
+  assert(
+    /What is wrong is choosing for them/.test(install) &&
+      /Do not pick targets from what you find in the tree/.test(install),
+    'the install skill makes the agent leave the choice to the user',
+  );
+  // `init` refuses to run without a TTY, and an agent calling it from a tool has none. A skill
+  // that just prints the bare command sends the agent into a dead end it cannot read its way
+  // out of, so the non-interactive form and its required `--scope` have to be spelled out.
+  assert(
+    /refuses to run without a terminal/.test(install) &&
+      /--scope` is required in this non-interactive form/.test(install),
+    'and says why the bare command dead-ends for an agent, with the form that does not',
+  );
+
+  // The two CI-specific ways to quietly hand away a guarantee.
+  assert(
+    /pin the action by commit SHA, not by tag/i.test(ci),
+    'the CI skill says to pin the action by SHA',
+  );
+  assert(
+    // Whitespace-tolerant: the body is authored as wrapped lines, so a fixed space would
+    // make this assertion depend on where the sentence happens to break.
+    /Never put `--yes` in a\s+workflow file/.test(ci),
+    'and never to pre-authorize a live data probe where nobody can see the prompt',
+  );
+  // A pipeline that fails on "non-zero" reports a broken scanner as a finding; one that passes
+  // on "not 2" reports a crashed scanner as a clean repo.
+  assert(
+    /`1`/.test(ci) && /`2`/.test(ci) && /Do not treat this as a pass/.test(ci),
+    'and tells the pipeline to tell a failed scan apart from a failing one',
+  );
+  assert(
+    /coverage\.notEvaluated/.test(ci),
+    'and not to let a green build overstate its own coverage',
   );
 }
 

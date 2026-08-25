@@ -48,5 +48,9 @@ jobs:
         run: |
           test -s bin/vibeward.mjs
           test -x bin/vibeward
+          # Every skill in the set, not just the first: the plugin and the `npx skills add`
+          # catalogue ship all of them, so a spec that stopped being written would go unnoticed.
           test -s skills/vibeward/SKILL.md
+          test -s skills/install-vibeward-guardrails/SKILL.md
+          test -s skills/ci-security-scanning-with-vibeward/SKILL.md
           node bin/vibeward.mjs --version

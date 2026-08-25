@@ -12,9 +12,18 @@ block lives between `<!-- vibeward:start -->` markers and is generated from
 
 ## Using vibeward from an agent
 
-Claude Code users can install the plugin, which ships the audit skill plus the hooks already
-wired: the guard runs on every prompt with no `init` step. Every other editor gets the same
-skill through `npx vibeward@latest init`.
+Install the agent skills for step-by-step workflows:
+
+```bash
+npx skills add JSiapoDEV/vibeward
+```
+
+- `vibeward` — scan a deployed URL or a code folder and report what it finds
+- `install-vibeward-guardrails` — install the prompt/action guard into the user's editor
+- `ci-security-scanning-with-vibeward` — gate pull requests and publish SARIF
+
+Claude Code users can instead install the plugin, which ships the same skills plus the hooks
+already wired: the guard runs on every prompt with no `init` step.
 
 ### Scanning
 
@@ -72,7 +81,7 @@ owns or is authorized to audit.**
 ```bash
 npm install
 npm run dev -- <url>     # run from source via tsx
-npm test                 # six suites, 770 assertions
+npm test                 # six suites, 782 assertions
 npm run lint             # eslint
 npm run typecheck        # tsc --noEmit, source and tests
 npm run format:check     # prettier
