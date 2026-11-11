@@ -71,6 +71,6 @@ jobs:
           # main, which is the whole point of doing this here.
           git checkout --orphan plugin
           git rm -rf --cached . > /dev/null
-          git add -f bin skills hooks .claude-plugin/plugin.json README.md LICENSE
+          git add -f bin skills hooks .claude-plugin/plugin.json .claude-plugin/icon.png README.md LICENSE
           git commit -m "plugin ${GITHUB_REF_NAME} (built from ${GITHUB_SHA})"
           git push -f origin plugin
