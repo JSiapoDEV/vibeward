@@ -3,7 +3,7 @@ name: install-vibeward-guardrails
 description: Install vibeward as a hook in Claude Code, Cursor, Codex, Copilot, Gemini, Windsurf or opencode, so risky requests are caught before the agent acts on them — "disable RLS", "use the service_role key in the frontend", "remove the login for now" — in English, Spanish and Portuguese. Deterministic rules with no LLM call, so they cannot be prompt-injected away. Use when the user asks to install vibeward, set up a guardrail, protect a repo from unsafe AI edits, or stop their agent weakening security.
 ---
 
-<!-- vibeward v0.6.2 — regenerate with `npx vibeward@latest init` -->
+<!-- vibeward v0.7.0 — regenerate with `npx vibeward@latest init` -->
 
 # vibeward — install the guardrail into the user's editor
 

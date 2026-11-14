@@ -294,7 +294,7 @@ To do it by hand instead, add it as a **Claude Code** `UserPromptSubmit` hook (i
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "npx vibeward@0.6.2 guard" }] }
+      { "hooks": [{ "type": "command", "command": "npx vibeward@0.7.0 guard" }] }
     ]
   }
 }
@@ -578,7 +578,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: JSiapoDEV/vibeward@v0.6.2
+      - uses: JSiapoDEV/vibeward@v0.7.0
         with:
           path: '.'
           # supabase: audit.json   # optional: a committed Supabase export

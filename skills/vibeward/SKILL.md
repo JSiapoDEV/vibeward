@@ -3,7 +3,7 @@ name: vibeward
 description: Scan a deployed URL or a code folder for exposed secrets, open Supabase Row-Level Security, Firebase exposure and insecure backends — plus SEO, metadata and AI visibility on a live site. Deterministic, with no LLM call anywhere. Use when the user asks to audit, scan, check or review an app, a website or a repo for security problems, when they mention a leaked key, service_role or RLS, or right after a deploy. Detects and reports only; it never fixes what it finds.
 ---
 
-<!-- vibeward v0.6.2 — regenerate with `npx vibeward@latest init` -->
+<!-- vibeward v0.7.0 — regenerate with `npx vibeward@latest init` -->
 
 # vibeward — audit a deployed site and report what it finds
 

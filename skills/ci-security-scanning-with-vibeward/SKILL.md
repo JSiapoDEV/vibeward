@@ -3,7 +3,7 @@ name: ci-security-scanning-with-vibeward
 description: Add vibeward to CI so every pull request is scanned for exposed secrets, open Supabase RLS and Firebase exposure, failing the build on critical findings and publishing SARIF to the GitHub Security tab. Works as a GitHub Action or as one npx command in any pipeline, with no API key, no Docker and no LLM call. Use when the user asks to add security scanning, a secret check, a pre-merge gate or SARIF upload to their CI, pipeline or pull requests.
 ---
 
-<!-- vibeward v0.6.2 — regenerate with `npx vibeward@latest init` -->
+<!-- vibeward v0.7.0 — regenerate with `npx vibeward@latest init` -->
 
 # vibeward — scan every pull request
 
