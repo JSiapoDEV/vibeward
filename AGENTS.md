@@ -15,7 +15,7 @@ block lives between `<!-- vibeward:start -->` markers and is generated from
 Install the agent skills for step-by-step workflows:
 
 ```bash
-npx skills add JSiapoDEV/vibeward#plugin
+npx skills add JSiapoDEV/vibeward
 ```
 
 - `vibeward` — scan a deployed URL or a code folder and report what it finds
@@ -123,7 +123,8 @@ checks that `npm run build:plugin` still produces what the hooks expect to run.
 - **Every finding needs a Spanish `es` overlay.** An untranslated one is a failing test, not a
   mixed-language report someone notices in a client's inbox.
 - Prose in a template or a report string is source. Change it in `src/`, never in the generated
-  file under `skills/` or `bin/`.
+  file under `skills/` or `bin/`. `skills/` is committed: after changing a template or the
+  version, run `npm run build:plugin` and commit what it regenerates, or CI fails.
 
 `METHODOLOGY.md` states what the published numbers were measured against, what they do not
 cover, and how to reproduce each one from a tag.

@@ -342,8 +342,8 @@ with a warm cache. There is no `npx @latest` anywhere in the path.
 That copy is a build artifact, and no build artifact is committed to `main`. It is produced on a
 release tag by [`publish-plugin.yml`](.github/workflows/publish-plugin.yml), on a clean runner,
 after the tests pass, and force-pushed to the orphan `plugin` branch that the marketplace entry
-points at. So it cannot drift from the source it was built from, and the repository you read is
-free of generated files.
+points at. So it cannot drift from the source it was built from, and the repository you read
+holds no built code.
 
 While the plugin is enabled, `vibeward` is also on the Bash tool's `PATH`, at the same pinned
 version — so the agent can audit a URL without installing anything either.
@@ -351,12 +351,10 @@ version — so the agent can audit a URL without installing anything either.
 ### Any SKILL.md agent: as skills
 
 ```bash
-npx skills add JSiapoDEV/vibeward#plugin
+npx skills add JSiapoDEV/vibeward
 ```
 
-The `#plugin` matters: the skills are generated files, published to the `plugin` branch on each
-release, so `main` holds none and the bare repository name finds nothing. The `skills` installer
-needs Node 22.20 or later.
+The `skills` installer needs Node 22.20 or later.
 
 Three skills, split by what you are actually asking for rather than by what the tool does — a
 host picks one by matching your request against its description, so a single skill covering
@@ -368,8 +366,9 @@ everything is a skill that triggers on nothing in particular:
 | **`install-vibeward-guardrails`** | "stop Claude disabling RLS", "install the guardrail" — `init`, the hooks, and which editor enforces what |
 | **`ci-security-scanning-with-vibeward`** | "gate my pull requests", "add a secret check to CI" — the Action, SARIF, and the exit codes |
 
-They are generated from [`src/init/templates.ts`](src/init/templates.ts), not hand-written, so
-they cannot drift from the tool they describe. The two setup skills are deliberately **not**
+They are generated from [`src/init/templates.ts`](src/init/templates.ts), not hand-written, and
+CI fails when the copies in [`skills/`](skills) differ from what the templates produce, so they
+cannot drift from the tool they describe. The two setup skills are deliberately **not**
 written into your project by `init`: a repo that has just been set up has no use for the
 instructions for setting it up.
 

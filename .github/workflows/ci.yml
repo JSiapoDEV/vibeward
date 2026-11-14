@@ -32,10 +32,10 @@ jobs:
       - run: npm test
 
   plugin:
-    # The plugin's files are no longer committed — `publish-plugin.yml` builds them on a tag
-    # and pushes them to the `plugin` branch, so there is no copy in the repository that
-    # could drift and nothing here to diff against. What is left worth checking is that the
-    # build still works, on the pull request rather than on release day.
+    # The bundled CLI is not committed — `publish-plugin.yml` builds it on a tag and pushes it
+    # to the `plugin` branch. The skills and the manifest are, so this job checks two things:
+    # that the build still works, on the pull request rather than on release day, and that
+    # what is committed is what the build produces.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -54,3 +54,9 @@ jobs:
           test -s skills/install-vibeward-guardrails/SKILL.md
           test -s skills/ci-security-scanning-with-vibeward/SKILL.md
           node bin/vibeward.mjs --version
+      - name: The committed skills and manifest are what the build generates
+        run: |
+          # `npx skills add JSiapoDEV/vibeward` installs skills/ from this branch, so a template
+          # or a version changed without `npm run build:plugin` would ship stale instructions.
+          git status --porcelain -- skills .claude-plugin/plugin.json
+          test -z "$(git status --porcelain -- skills .claude-plugin/plugin.json)"

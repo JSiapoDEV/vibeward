@@ -67,8 +67,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # An orphan branch, force-pushed: the branch holds the current build and no
-          # history. `-f` on `git add` is required because bin/ and skills/ are ignored on
-          # main, which is the whole point of doing this here.
+          # history. `-f` on `git add` is required because bin/ is ignored on main, which
+          # is the whole point of building it here.
           git checkout --orphan plugin
           git rm -rf --cached . > /dev/null
           git add -f bin skills hooks .claude-plugin/plugin.json .claude-plugin/icon.png README.md LICENSE
