@@ -351,8 +351,12 @@ version — so the agent can audit a URL without installing anything either.
 ### Any SKILL.md agent: as skills
 
 ```bash
-npx skills add JSiapoDEV/vibeward
+npx skills add JSiapoDEV/vibeward#plugin
 ```
+
+The `#plugin` matters: the skills are generated files, published to the `plugin` branch on each
+release, so `main` holds none and the bare repository name finds nothing. The `skills` installer
+needs Node 22.20 or later.
 
 Three skills, split by what you are actually asking for rather than by what the tool does — a
 host picks one by matching your request against its description, so a single skill covering

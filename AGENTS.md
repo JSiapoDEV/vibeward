@@ -15,7 +15,7 @@ block lives between `<!-- vibeward:start -->` markers and is generated from
 Install the agent skills for step-by-step workflows:
 
 ```bash
-npx skills add JSiapoDEV/vibeward
+npx skills add JSiapoDEV/vibeward#plugin
 ```
 
 - `vibeward` — scan a deployed URL or a code folder and report what it finds
