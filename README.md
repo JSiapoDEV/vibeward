@@ -44,8 +44,8 @@ what it should do next.
 **It does three things:**
 
 1. **Detects**, deterministically and with no LLM call anywhere — **25 security rules** and
-   **19 website checks** over a deployed site or a code folder, plus **8 intent rules** over
-   natural language in **English, Spanish and Portuguese**, held to **782 assertions**.
+   **19 website checks** over a deployed site or a code folder, plus **9 intent rules** over
+   natural language in **English, Spanish and Portuguese**, held to **842 assertions**.
 2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
 3. **Warns first**, through editor hooks, at the moments risk enters the system.
 
@@ -87,7 +87,7 @@ worth more than either tool's feature list.
 **Built with Claude Code**, which is worth saying out loud in a project whose subject is the code
 AI agents produce. The objection is obvious and fair: a security tool written by an agent is
 exactly the kind of thing this tool exists to be suspicious of. That is why every rule is
-deterministic and readable in this repository, why there are **782 assertions** including corpora
+deterministic and readable in this repository, why there are **842 assertions** including corpora
 of harmless input built specifically to make the rules misfire, and why the release notes lead
 with false positives rather than features. [`METHODOLOGY.md`](METHODOLOGY.md) states what those
 numbers were measured against, what they do not cover, and how to reproduce every one of them from
@@ -168,8 +168,9 @@ The platforms tell you securing the data is *your* responsibility. `vibeward` is
 4. **Source maps & HTTP headers** — exposed `.map` files, plus CSP, HSTS, X-Frame-Options,
    X-Content-Type-Options, and technology leaks.
 5. **Server-rendered stacks** (Next.js + Prisma/Drizzle) — missing security headers in
-   `next.config`, server actions and route handlers that mutate data with no auth guard, and
-   formula injection in Excel/CSV exports.
+   `next.config`, server actions and route handlers that mutate data with no auth guard,
+   formula injection in Excel/CSV exports, and file uploads whose type check trusts the
+   extension, the `accept` attribute or the declared MIME type instead of the file's magic bytes.
 
 ### Website quality & AI visibility
 
@@ -273,7 +274,7 @@ does not work on a regex. It also means it is a seatbelt and not a boundary — 
 find a phrasing that means "disable RLS" and does not trip a rule. Report those, they are how the
 lexicon grows.
 
-**It works in English, Spanish and Portuguese.** Not by translating eight rules three times —
+**It works in English, Spanish and Portuguese.** Not by translating nine rules three times —
 the dangerous *objects* are already language-independent (`RLS`, `service_role`, `CORS`, `.env`
 are identifiers, not words), so a language costs one small verb table in `src/checks/lexicon.ts`
 and nothing else. That is roughly 40 entries a native speaker can review in five minutes, which

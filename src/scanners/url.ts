@@ -11,6 +11,7 @@ import { readConsoleErrors } from '../checks/console.js';
 import { probeRLS, rlsFindings, checkGraphqlIntrospection } from '../checks/supabase.js';
 import type { RlsResult } from '../checks/supabase.js';
 import { extractFirebaseConfig, checkFirebase, firebaseTarget } from '../checks/firebase.js';
+import { hasFileInput } from '../checks/uploads.js';
 import type { FirebaseConfig } from '../checks/firebase.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { applySuppressions, loadConfig, notApplicableChecks } from '../core/config.js';
@@ -126,6 +127,7 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     ? { projectUrl: normalizeUrl(args.supabaseUrl), anonKey: args.anonKey ?? null }
     : null;
   let firebaseCfg: FirebaseConfig | null = extractFirebaseConfig(mainPage.body);
+  let fileInputSeen = hasFileInput(mainPage.body);
 
   let count = 0;
   let sourceMapFound = false;
@@ -144,6 +146,7 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     findings.push(...scanText(bundle.body, url));
     if (!supabaseCfg) supabaseCfg = extractSupabaseConfig(bundle.body);
     if (!firebaseCfg) firebaseCfg = extractFirebaseConfig(bundle.body);
+    if (!fileInputSeen) fileInputSeen = hasFileInput(bundle.body);
 
     if (!sourceMapFound && count <= 12) {
       const sm = await checkSourceMap(url, bundle.body);
@@ -217,6 +220,7 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     for (const page of crawl.pages) {
       if (!supabaseCfg) supabaseCfg = extractSupabaseConfig(page.html);
       if (!firebaseCfg) firebaseCfg = extractFirebaseConfig(page.html);
+      if (!fileInputSeen) fileInputSeen = hasFileInput(page.html);
     }
 
     const pages = crawl.pages.map((p) => parsePage(p.html, p.url));
@@ -379,6 +383,17 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
       AREA.firebaseRules,
       'Firebase Realtime Database and Storage bucket exposure',
       'Exposición de Firebase Realtime Database y del bucket de Storage',
+    );
+  }
+
+  // The site takes uploads, and from the outside there is no way to tell whether the server
+  // reads their content or trusts the name — short of uploading a disguised file, which is an
+  // attack, not a scan. Said here so a clean report is not read as "uploads are safe".
+  if (fileInputSeen) {
+    cov.notEvaluated(
+      AREA.uploadValidation,
+      'the site has a file upload input, but whether the server checks the content (magic bytes) or only the extension and declared type cannot be seen from outside. Scan the code with `vibeward scan <folder>` to cover it',
+      'el sitio tiene un campo de subida de archivos, pero si el servidor comprueba el contenido (magic bytes) o solo la extensión y el tipo declarado no se puede ver desde fuera. Escanea el código con `vibeward scan <carpeta>` para cubrirlo',
     );
   }
 

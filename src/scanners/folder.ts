@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, extname, basename, sep } from 'node:path';
 import { scanSource } from '../checks/secrets.js';
 import { scanBackendFile } from '../checks/backend.js';
+import { checkUploadValidation } from '../checks/uploads.js';
 import { analyzeMigrations } from '../checks/migrations.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { C, log } from '../core/terminal.js';
@@ -127,6 +128,8 @@ export function scanFolder(root: string): FolderScan {
 
     findings.push(...scanSource(content, rel));
     findings.push(...scanBackendFile(rel, content));
+    const upload = checkUploadValidation(rel, content);
+    if (upload) findings.push(upload);
 
     if (isEnv) {
       findings.push({
@@ -173,6 +176,11 @@ export function folderCoverage(input: {
     AREA.backendAuthz,
     'Next.js security headers, server-action authorization and formula injection in the same files',
     'Cabeceras de seguridad de Next.js, autorización en server actions e inyección de fórmulas en esos mismos ficheros',
+  );
+  cov.checked(
+    AREA.uploadValidation,
+    'File-upload handlers whose type check reads only the extension, the `accept` attribute or the declared MIME type, never the content',
+    'Manejadores de subida de archivos cuya comprobación de tipo solo lee la extensión, el atributo `accept` o el tipo MIME declarado, nunca el contenido',
   );
 
   if (migrations > 0) {

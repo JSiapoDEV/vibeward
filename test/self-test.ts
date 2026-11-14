@@ -38,6 +38,9 @@ import {
   WEB_CHECKS,
 } from '../src/checks/web.js';
 import { checkPlainHttp, followPlainHttp } from '../src/checks/transport.js';
+import { checkUploadValidation, hasFileInput } from '../src/checks/uploads.js';
+import { scanWriteMoment } from '../src/guard/moments.js';
+import { folderCoverage } from '../src/scanners/folder.js';
 import {
   normalizePageUrl,
   discoverInternalLinks,
@@ -1967,6 +1970,177 @@ console.log('\n37. Secret detection — precision, checked against real deployed
     !test.some((f) => /drain money/.test(f.why)),
     'and is never described as able to drain money, because it cannot',
   );
+}
+
+console.log('\n38. File uploads — a type check the sender writes is not a check');
+{
+  // Every one of these trusts the extension, the `accept` attribute or the declared MIME type,
+  // and nothing else. One per stack, because the hole looks different in each.
+  const TRUSTS_THE_NAME: [name: string, path: string, src: string][] = [
+    [
+      'multer fileFilter on mimetype',
+      'routes/upload.js',
+      "const upload = multer({ fileFilter: (req, file, cb) => {\n  if (['image/png','image/jpeg'].includes(file.mimetype)) cb(null, true);\n}});",
+    ],
+    [
+      'multer, extension read on one line and compared on the next',
+      'routes/upload.js',
+      "const multer = require('multer');\nconst ext = path.extname(file.originalname).toLowerCase();\nif (ext !== '.png') return cb(new Error('bad'));",
+    ],
+    [
+      'Next.js route handler on File.type',
+      'app/api/upload/route.ts',
+      "export async function POST(req) {\n  const data = await req.formData();\n  const file = data.get('file') as File;\n  if (!file.type.startsWith('image/')) return new Response('no', { status: 400 });\n}",
+    ],
+    [
+      'browser-direct Supabase upload guarded only by accept',
+      'src/components/Avatar.tsx',
+      '<input type="file" accept="image/*" onChange={(e) => supabase.storage.from(\'avatars\').upload(p, e.target.files[0])} />',
+    ],
+    [
+      'Firebase uploadBytes guarded by files[0].type',
+      'src/Upload.tsx',
+      "if (!e.target.files[0].type.startsWith('image/')) return;\nawait uploadBytes(ref, e.target.files[0]);",
+    ],
+    [
+      'an extension regex on originalname',
+      'server/upload.ts',
+      "app.post('/u', upload.single('f'), (req, res) => { if (!/\\.(jpe?g|png)$/i.test(req.file.originalname)) return res.sendStatus(400); });",
+    ],
+    [
+      "Flask's documented ALLOWED_EXTENSIONS pattern",
+      'app.py',
+      "f = request.files['file']\nif f.filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS:\n    f.save(p)",
+    ],
+    [
+      'FastAPI UploadFile.content_type',
+      'main.py',
+      'async def up(file: UploadFile):\n    if file.content_type not in ("image/png", "image/jpeg"):\n        raise HTTPException(400)',
+    ],
+    [
+      "PHP $_FILES['type']",
+      'upload.php',
+      "if ($_FILES['f']['type'] == 'image/png') { move_uploaded_file($_FILES['f']['tmp_name'], $dst); }",
+    ],
+    [
+      'Go part header Content-Type',
+      'upload.go',
+      'file, header, _ := r.FormFile("f")\nif header.Header.Get("Content-Type") != "image/png" { return }',
+    ],
+  ];
+  for (const [name, path, src] of TRUSTS_THE_NAME) {
+    const f = checkUploadValidation(path, src);
+    assert(
+      (f?.id ?? '').startsWith('upload_type_by_name_') && f?.cwe === 'CWE-434',
+      `flags: ${name}`,
+    );
+  }
+
+  const f = checkUploadValidation('app/api/upload/route.ts', TRUSTS_THE_NAME[2]![2]);
+  assert(f?.source === 'app/api/upload/route.ts:4', 'points at the line that makes the check');
+  assert(
+    Boolean(f?.evidence?.includes("file.type.startsWith('image/')")),
+    'and quotes it as evidence',
+  );
+
+  // The false-positive corpus. Each one is a correct handler, or not an upload check at all.
+  const CORRECT: [name: string, path: string, src: string][] = [
+    [
+      'file-type reads the bytes after the MIME check',
+      'routes/upload.js',
+      "import { fileTypeFromBuffer } from 'file-type';\nconst multer = require('multer');\nif (!ALLOWED.includes(file.mimetype)) return;\nconst t = await fileTypeFromBuffer(buf);",
+    ],
+    [
+      'a hand-rolled PNG signature check',
+      'app/api/upload/route.ts',
+      "const data = await req.formData();\nconst file = data.get('f') as File;\nif (file.type !== 'image/png') return;\nconst b = new Uint8Array(await file.arrayBuffer());\nconst isPng = b[0] === 0x89 && b[1] === 0x50;",
+    ],
+    [
+      'sharp decodes the image, which fails on anything that is not one',
+      'routes/upload.js',
+      "const multer = require('multer');\nif (file.mimetype !== 'image/png') return;\nawait sharp(file.buffer).resize(200).toBuffer();",
+    ],
+    [
+      'PHP finfo',
+      'upload.php',
+      "$fi = new finfo(FILEINFO_MIME_TYPE);\nif ($_FILES['f']['type'] == 'image/png') move_uploaded_file($a, $b);",
+    ],
+    [
+      'Go http.DetectContentType',
+      'upload.go',
+      'file, header, _ := r.FormFile("f")\nif header.Header.Get("Content-Type") != "image/png" { return }\nct := http.DetectContentType(buf)',
+    ],
+    [
+      'python-magic',
+      'app.py',
+      "import magic\nf = request.files['file']\nif f.mimetype not in ALLOWED: abort(400)",
+    ],
+    [
+      'the extension read only to NAME the stored file',
+      'routes/upload.js',
+      "const multer = require('multer');\nconst storage = multer.diskStorage({ filename: (req, file, cb) => cb(null, uuid() + path.extname(file.originalname)) });",
+    ],
+    [
+      'the declared type passed through, not compared',
+      'src/lib/upload.ts',
+      "await supabase.storage.from('docs').upload(path, file, { contentType: file.type });",
+    ],
+    [
+      'a reducer comparing action.type next to req.files',
+      'src/store.ts',
+      "if (action.type === 'upload/start') return { ...s };\nconst files = req.files;",
+    ],
+    [
+      'a login form comparing profile.type',
+      'app/api/login/route.ts',
+      "const data = await req.formData();\nif (userProfile.type === 'admin') redirect('/admin');",
+    ],
+    [
+      'an extension check with no upload anywhere',
+      'src/util.ts',
+      "if (path.extname(p) === '.md') render(p);",
+    ],
+  ];
+  for (const [name, path, src] of CORRECT) {
+    assert(checkUploadValidation(path, src) === null, `silent: ${name}`);
+  }
+
+  // The guard sees the same thing before the file exists, and says what to do instead of
+  // falling through to the generic "rotate the key" advice.
+  const risks = scanWriteMoment({
+    filePath: 'app/api/upload/route.ts',
+    content: TRUSTS_THE_NAME[2]![2],
+  });
+  const risk = risks.find((r) => r.id.startsWith('upload_type_by_name_'));
+  assert(Boolean(risk), 'guard: a pending write of the handler is caught at the action moment');
+  assert(
+    Boolean(risk && /magic bytes|first bytes/.test(risk.instead) && !/rotate/i.test(risk.instead)),
+    'guard: and the advice is about the content check, not about rotating a key',
+  );
+  assert(
+    scanWriteMoment({ filePath: 'test/upload.test.ts', content: TRUSTS_THE_NAME[2]![2] }).length ===
+      0,
+    'guard: a test fixture is left alone',
+  );
+
+  // Coverage: the folder scan says it looked; the URL scan can only ever say it could not.
+  const cov = folderCoverage({
+    dir: '.',
+    filesScanned: 3,
+    migrations: 0,
+    supabaseContext: false,
+    supabaseExport: false,
+  });
+  assert(
+    cov.find((e) => e.id === 'upload_validation')?.status === 'checked',
+    'a folder scan reports upload validation as checked',
+  );
+  assert(
+    hasFileInput('jsx("input",{type:"file",accept:"image/*"})'),
+    'a compiled JSX file input is seen',
+  );
+  assert(hasFileInput('<input name="a" type=file>'), 'an HTML file input is seen');
+  assert(!hasFileInput('<input type="text"> {type:"files"}'), 'other inputs are not');
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

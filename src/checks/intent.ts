@@ -63,6 +63,29 @@ interface RuleSpec {
   vetoOnUi?: boolean;
   /** Extra vetoes, language-independent. */
   exclude?: RegExp[];
+  /** The clause must also match one of these — the context that makes the pattern mean it. */
+  require?: RegExp[];
+}
+
+/** A unicode-aware right boundary, the counterpart of NOT_WORD. */
+const END_WORD = '(?![\\p{L}\\p{N}_])';
+
+/** One language's patterns for `upload-type-by-name`, from its lexicon. */
+function uploadByName(lex: Lexicon): RegExp[] {
+  const u = lex.uploads;
+  const verify = `\\b${stems(u.verify)}`;
+  const only = `${NOT_WORD}${group(u.only)}${END_WORD}`;
+  const enough = `${NOT_WORD}${group(u.enough)}${END_WORD}`;
+  const byName = `${NOT_WORD}(?:${group(u.extension)}|${T.declaredType})${END_WORD}`;
+  // Gaps stop at a comma: "only validate the size, the extension check is already there" is
+  // two instructions, and the second one is not the one "only" is about.
+  const gap = (n: number): string => `[^\n,;:]{0,${n}}`;
+  return [
+    new RegExp(`${verify}${gap(30)}${only}${gap(25)}${byName}`, 'iu'),
+    new RegExp(`${only}${gap(15)}${verify}${gap(30)}${byName}`, 'iu'),
+    new RegExp(`${enough}${gap(30)}${byName}`, 'iu'),
+    new RegExp(`${byName}${gap(30)}${enough}`, 'iu'),
+  ];
 }
 
 const SPECS: RuleSpec[] = [
@@ -183,6 +206,42 @@ const SPECS: RuleSpec[] = [
     instead:
       'Git-ignore `.env`, keep a `.env.example` with placeholder values, and never log secret values.',
   },
+  {
+    id: 'upload-type-by-name',
+    risk: 'Validating an upload only by its extension or declared type',
+    // "Only" is the whole rule. Checking the extension is fine as a hint; the request that
+    // ships a hole is the one that makes it the ONLY check — or says `accept` is enough.
+    raw: LANGS.flatMap((l) => uploadByName(LEXICONS[l])),
+    // Uploads specifically: "check only the content-type" on a JSON API is a different
+    // conversation, and "extension" alone is as often a browser extension.
+    require: [
+      ...LANGS.map(
+        (l) => new RegExp(`${NOT_WORD}${group(LEXICONS[l].uploads.nouns)}${END_WORD}`, 'iu'),
+      ),
+      /\baccept\b/i,
+    ],
+    exclude: [
+      // Asking for the content check is the fix. So is any "not only" / "as well as".
+      /magic|signature|firma|assinatura|file-type|filetype|finfo|\bbytes?\b|contenido|conte[úu]do|\bcontent\b(?![-\s]?type)/iu,
+      // "Not only the extension" in each language, from its own negations and its own "only".
+      ...LANGS.map((l) => {
+        const lex = LEXICONS[l];
+        const only = group(lex.uploads.only);
+        return new RegExp(
+          `${NOT_WORD}${group(lex.negations)}${END_WORD}[^\n]{0,20}${NOT_WORD}${only}${END_WORD}`,
+          'iu',
+        );
+      }),
+      /\b(instead\s+of|rather\s+than|besides|in\s+addition\s+to|as\s+well\s+as|beyond|en\s+lugar\s+de|en\s+vez\s+de|adem[áa]s\s+de|m[áa]s\s+all[áa]\s+de|em\s+vez\s+de|al[ée]m\s+d[aeo])\b/iu,
+      // Using the extension to decide how to DISPLAY or PARSE a file is not an access decision.
+      /\b(show|display|list|render|gallery|galer[íi]a|preview|icon|parser|syntax|highlight\p{L}*|to\s+(pick|choose|select|decide|detect|name|sort|group)|mostrar|muestr\p{L}*|listar|exib\p{L}*|[íi]cono?|[íi]cone|para\s+(elegir|escoger|decidir|nombrar|ordenar|escolher))\b/iu,
+      // Picking which files a tool touches is selection, not validation.
+      /(?<![\p{L}\p{N}_])(only|just|solo|s[óo]lo|solamente|apenas|somente)\s+(the\s+|los\s+|las\s+|os\s+|as\s+)?(files?|archivos|ficheros|arquivos)\s+(with|con|com|que|whose|ending)\b/iu,
+    ],
+    why: 'The extension, the `accept` attribute and the MIME type are all written by the sender. `shell.php` renamed to `photo.png` and sent with `Content-Type: image/png` passes all three, and `accept` does not run at all outside the browser — so a check built only from them stops nobody who means to get through.',
+    instead:
+      'Validate on the server by content: read the first bytes (magic bytes) and match them against an allowlist — `file-type` in Node, `python-magic` in Python, `finfo` in PHP. Keep `accept` and the extension as UI hints, and store the file under a generated name with the extension of the detected type.',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -196,6 +255,7 @@ interface CompiledRule {
   instead: string;
   patterns: RegExp[];
   exclude: RegExp[];
+  require: RegExp[];
   vetoOnUi: boolean;
 }
 
@@ -223,6 +283,7 @@ function compile(langs: Lang[]): CompiledRule[] {
       instead: spec.instead,
       patterns,
       exclude: spec.exclude ?? [],
+      require: spec.require ?? [],
       vetoOnUi: spec.vetoOnUi ?? false,
     };
   });
@@ -339,6 +400,7 @@ export function scanIntent(prompt: string): IntentFinding[] {
       if (found.has(rule.id)) continue;
       if (rule.vetoOnUi && hasUiNoun) continue;
       if (rule.exclude.some((p) => p.test(clause))) continue;
+      if (rule.require.length && !rule.require.some((p) => p.test(clause))) continue;
       if (rule.patterns.some((p) => p.test(clause))) {
         found.set(rule.id, { id: rule.id, risk: rule.risk, why: rule.why, instead: rule.instead });
       }

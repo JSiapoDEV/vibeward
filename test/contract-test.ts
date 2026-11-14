@@ -21,6 +21,7 @@ import {
 import { localize, coverage } from '../src/core/i18n.js';
 import { buildReport, webCheckCoverage } from '../src/reporters/markdown.js';
 import { folderCoverage } from '../src/scanners/folder.js';
+import { checkUploadValidation } from '../src/checks/uploads.js';
 import { AREA, isComplete } from '../src/core/coverage.js';
 import type { CoverageEntry } from '../src/core/coverage.js';
 import type { Finding } from '../src/core/types.js';
@@ -77,6 +78,12 @@ function everyFinding(): Finding[] {
       },
     ]),
     ...checkHeaders(new Headers()),
+    ...[
+      checkUploadValidation(
+        'app/api/upload/route.ts',
+        "const d = await req.formData();\nif (!file.type.startsWith('image/')) return;",
+      ),
+    ].filter((f): f is Finding => f !== null),
     ...analyzeSupabaseExport({ tables: [] } as never),
   ];
 }

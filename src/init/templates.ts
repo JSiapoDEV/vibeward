@@ -567,8 +567,8 @@ export function skillFile(spec: SkillSpec = SKILLS[0]!): string {
  * turn RLS off. A rule that only loads once the agent has decided to audit is not a
  * guardrail; it is a footnote.
  *
- * These are the same eight risks the `guard` hook matches on a user's prompt, restated for
- * the agent's own decisions. The hook catches the request; this catches the improvisation.
+ * These are the risks the `guard` hook matches on a user's prompt, restated for the agent's
+ * own decisions. The hook catches the request; this catches the improvisation.
  */
 const ALWAYS_ON = [
   '## Security rules',
@@ -587,6 +587,9 @@ const ALWAYS_ON = [
   '- **Never commit `.env`, and never log the value of a secret.** The name is fine, the',
   '  value is not, and git history keeps it after you delete the line.',
   '- **Never widen CORS to `*` on an authenticated API.** Whitelist the exact domains.',
+  '- **Validate an uploaded file by its content, on the server.** Read its first bytes (magic',
+  '  bytes) and match them against an allowlist. The extension, the `accept` attribute and the',
+  '  declared MIME type are chosen by the sender — a hint for the UI, never the check.',
   '',
   'If a leak has already happened, **say so and stop.** Deleting the line does not un-leak the',
   'key — it has to be rotated, and only the owner decides when, how, and whether the incident',

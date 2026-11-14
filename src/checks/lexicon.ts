@@ -52,6 +52,23 @@ export interface Lexicon {
   datastores: string[];
   /** Authentication vocabulary. `auth` and `login` are loanwords almost everywhere. */
   auth: string[];
+  /**
+   * The words of one rule, `upload-type-by-name`. Kept out of `verbs` on purpose: the negation
+   * veto is compiled from every verb role, and "don't check anything, just disable RLS" must
+   * not become a free pass because `check` joined that table.
+   */
+  uploads: {
+    /** Verb stems: validate, check, verify, restrict. */
+    verify: string[];
+    /** Exact words. The rule is "ONLY by extension"; the extension as a hint is fine. */
+    only: string[];
+    /** "is enough", as in "the accept attribute is enough". */
+    enough: string[];
+    /** The file extension. MIME type and `accept` are identifiers, in UNIVERSAL_TARGETS. */
+    extension: string[];
+    /** Nouns that make it an upload rather than a JSON body or a browser extension. */
+    nouns: string[];
+  };
 }
 
 const EN: Lexicon = {
@@ -119,6 +136,24 @@ const EN: Lexicon = {
     'auth\\s*wall',
     'auth\\s*(check|guard|middleware|requirement)',
   ],
+  uploads: {
+    verify: ['valid', 'check', 'verif', 'filter', 'restrict', 'limit'],
+    only: ['only', 'just'],
+    enough: ['is\\s+enough', 'suffices'],
+    extension: ['extensions?'],
+    nouns: [
+      'files?',
+      'uploads?',
+      'uploaded',
+      'uploading',
+      'images?',
+      'pdfs?',
+      'attachments?',
+      'photos?',
+      'avatars?',
+      'documents?',
+    ],
+  },
 };
 
 const ES: Lexicon = {
@@ -198,6 +233,25 @@ const ES: Lexicon = {
     'auth',
     'ruta\\s+protegida',
   ],
+  uploads: {
+    verify: ['valid', 'verific', 'comprob', 'chequ', 'filtr', 'restring', 'limit'],
+    only: ['solo', 's[óo]lo', 'solamente', '[úu]nicamente'],
+    enough: ['basta', 'alcanza', 'es\\s+suficiente'],
+    extension: ['extensi[óo]n', 'extensiones'],
+    nouns: [
+      'archivos?',
+      'ficheros?',
+      'subidas?',
+      'subir',
+      'sube',
+      'im[áa]gen',
+      'im[áa]genes',
+      'adjuntos?',
+      'fotos?',
+      'documentos?',
+      'pdfs?',
+    ],
+  },
 };
 
 const PT: Lexicon = {
@@ -266,6 +320,24 @@ const PT: Lexicon = {
     'sess[ãa]o',
     'rota\\s+protegida',
   ],
+  uploads: {
+    verify: ['valid', 'verific', 'confer', 'chec', 'filtr', 'restring', 'limit'],
+    // `só` keeps its accent: bare `so` is an English word, and all three tables are compiled
+    // into one matcher.
+    only: ['só', 'apenas', 'somente', 'unicamente'],
+    enough: ['basta', '[ée]\\s+suficiente', 'j[áa]\\s+chega'],
+    extension: ['extens[ãa]o', 'extens[õo]es'],
+    nouns: [
+      'arquivos?',
+      'uploads?',
+      'imagem',
+      'imagens',
+      'anexos?',
+      'fotos?',
+      'documentos?',
+      'pdfs?',
+    ],
+  },
 };
 
 export const LEXICONS: Record<Lang, Lexicon> = { en: EN, es: ES, pt: PT };
@@ -291,6 +363,8 @@ export const UNIVERSAL_TARGETS = {
   rls: '(rls|row[-\\s]?level\\s+security|seguridad\\s+a\\s+nivel\\s+de\\s+fila|seguran[çc]a\\s+a\\s+n[íi]vel\\s+de\\s+linha)',
   secret:
     '(api[-\\s]?key|secret|token|password|credential|credencial|contrase[ñn]a|senha|access[-\\s]?key|private[-\\s]?key|connection\\s+string)',
+  /** What a sender declares about a file: its MIME type, or the `accept` attribute. */
+  declaredType: '(mime[-\\s]?types?|content[-\\s]?type|file\\.type|accept)',
   securityControl:
     '(security|seguridad|seguran[çc]a|csrf|xss|sanitiz|rate[-\\s]?limit|l[íi]mite\\s+de\\s+peticiones|signature\\s+verification|certificate\\s+verification|ssl\\s+verification)',
 } as const;

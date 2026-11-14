@@ -67,6 +67,8 @@ export const AREA = {
   sourceSecrets: 'source_secrets',
   /** Server-side authorization and framework configuration in the source tree. */
   backendAuthz: 'backend_authz',
+  /** File uploads checked by name or declared type instead of by their content (magic bytes). */
+  uploadValidation: 'upload_validation',
   /** RLS, permissive policies, SECURITY DEFINER and anon grants in SQL migrations. */
   sqlMigrations: 'sql_migrations',
   /** The website quality and AI-visibility pass, as a whole. */

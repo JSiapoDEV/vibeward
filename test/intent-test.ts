@@ -55,6 +55,23 @@ const BENIGN: [prompt: string, trap: string][] = [
   ['add rate limiting to the login endpoint', 'adding a control'],
   ['set the storage bucket to private', 'the safe direction'],
   ['move the service_role key out of the client bundle', 'the fix, not the hole'],
+  // upload-type-by-name: "extension", "accept" and "only" are everywhere in ordinary work.
+  [
+    'only accept png and jpg files in the avatar upload',
+    'restricting types is the goal, not the method',
+  ],
+  ['validate the file by magic bytes, not just the extension', 'asking for the content check'],
+  ['add accept=image/* to the input and validate magic bytes on the server', 'accept as a hint'],
+  ['restrict uploads to images, check the extension and the content', 'extension plus content'],
+  ['lint only files with the .ts extension', 'selecting files for a tool'],
+  ['filter the file list to only show the .md extension', 'display, not access'],
+  ['check only the file extension to pick the icon', 'choosing an icon'],
+  ['only check the extension to choose which parser to use for the file', 'choosing a parser'],
+  ['only validate the file size, the extension check is already there', 'two instructions'],
+  ['the VS Code extension should only check open files', 'a browser/editor extension'],
+  ['validate only the content-type header of the JSON request', 'not an upload'],
+  ['just set the content-type of the uploaded file to image/png', 'setting, not checking'],
+  ['rename the file extension to .webp', 'renaming'],
 ];
 
 /** Requests that must be caught. Losing one of these is the whole point of the tool. */
@@ -82,6 +99,10 @@ const RISKY: [prompt: string, id: string][] = [
   ['turn off rate limiting on the api', 'disable-security'],
   ['commit the .env so it deploys', 'commit-env'],
   ["log the secret to check if it's loaded", 'commit-env'],
+  ['just check the file extension on upload', 'upload-type-by-name'],
+  ['validate uploads only by mime type', 'upload-type-by-name'],
+  ['only check the extension of the uploaded file, keep it simple', 'upload-type-by-name'],
+  ['the accept attribute is enough for the image upload', 'upload-type-by-name'],
 ];
 
 /**
@@ -105,6 +126,10 @@ const BENIGN_ES: [prompt: string, trap: string][] = [
   ['mueve la service_role key fuera del cliente', 'the fix, not the hole'],
   ['pon el bucket en privado', 'the safe direction'],
   ['refactoriza el middleware de auth para usar el nuevo helper', 'keeping auth'],
+  ['no valides solo la extensión, revisa los magic bytes del archivo', 'negation plus the fix'],
+  ['valida la imagen por su contenido y además la extensión', 'content plus extension'],
+  ['solo muestra el icono según la extensión del archivo', 'display, not access'],
+  ['filtra solo las imágenes por extensión en la galería', 'display, not access'],
 ];
 
 const BENIGN_PT: [prompt: string, trap: string][] = [
@@ -119,6 +144,8 @@ const BENIGN_PT: [prompt: string, trap: string][] = [
   ['ignore o eslint nesta linha', 'a linter is not security'],
   ['mova a service_role key para fora do cliente', 'the fix, not the hole'],
   ['deixe o bucket privado', 'the safe direction'],
+  ['além da extensão, valide os magic bytes do arquivo', 'extension plus content'],
+  ['não valide só a extensão do arquivo, confira a assinatura', 'negation plus the fix'],
 ];
 
 const RISKY_ES: [prompt: string, id: string][] = [
@@ -132,6 +159,10 @@ const RISKY_ES: [prompt: string, id: string][] = [
   ['sube el .env al repo', 'commit-env'],
   ['desactiva el csrf para que el formulario envíe', 'disable-security'],
   ['permite todos los orígenes en cors', 'cors-wildcard'],
+  ['valida solo la extensión del archivo', 'upload-type-by-name'],
+  ['con el atributo accept basta para la subida', 'upload-type-by-name'],
+  ['basta con validar la extensión de la imagen', 'upload-type-by-name'],
+  ['verifica únicamente el content-type del archivo subido', 'upload-type-by-name'],
 ];
 
 const RISKY_PT: [prompt: string, id: string][] = [
@@ -144,6 +175,8 @@ const RISKY_PT: [prompt: string, id: string][] = [
   ['suba o .env pro repositório', 'commit-env'],
   ['desative o csrf para o formulário enviar', 'disable-security'],
   ['permita todas as origens no cors', 'cors-wildcard'],
+  ['valida só a extensão do arquivo', 'upload-type-by-name'],
+  ['é suficiente checar a extensão do arquivo', 'upload-type-by-name'],
 ];
 
 /**
@@ -167,6 +200,8 @@ const CROSS_LANGUAGE: string[] = [
   'the tired auth flow needs a rewrite',
   'show the token count in the data table',
   'mostly the data is public already',
+  // Portuguese `só` ("only") is pinned with its accent: bare `so` is English.
+  'validate the upload so the extension matches the name',
 ];
 
 /**

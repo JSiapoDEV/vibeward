@@ -10,6 +10,7 @@ import { scanIntent } from '../checks/intent.js';
 import { scanInjection } from '../checks/injection.js';
 import { scanSource } from '../checks/secrets.js';
 import { analyzeMigrations } from '../checks/migrations.js';
+import { checkUploadValidation } from '../checks/uploads.js';
 import type { Finding } from '../core/types.js';
 import type { Risk } from './verdict.js';
 
@@ -77,6 +78,9 @@ function insteadFor(f: Finding): string {
   }
   if (f.id === 'security_definer') {
     return 'Run the function as the caller unless it genuinely needs to escalate, and if it does, pin `search_path` and validate every argument. SECURITY DEFINER runs with the owner rights and bypasses the caller policies.';
+  }
+  if (f.id.startsWith('upload_type_by_name_')) {
+    return 'Read the first bytes of the uploaded file on the server and match them against an allowlist of types (`file-type` in Node, `python-magic` in Python, `finfo` in PHP, `http.DetectContentType` in Go). Keep the extension, `accept` and the declared MIME type as hints only, and store the file under a generated name with the extension of the detected type.';
   }
   if (f.id.startsWith('grant_') || f.id.includes('anon')) {
     return 'Grant to `authenticated` rather than `anon` or `public`, and let RLS decide the rows. Anyone with the publishable key holds the anon role.';
@@ -149,6 +153,8 @@ export function scanWriteMoment({ filePath, content }: PendingWrite): Risk[] {
       }
       risks.push(fromFinding(f, filePath));
     }
+    const upload = checkUploadValidation(filePath, content);
+    if (upload) risks.push(fromFinding(upload, filePath));
   }
 
   if (SQL_FILE.test(filePath) || /\b(alter|create)\s+table\b/i.test(content)) {

@@ -81,7 +81,7 @@ owns or is authorized to audit.**
 ```bash
 npm install
 npm run dev -- <url>     # run from source via tsx
-npm test                 # six suites, 782 assertions
+npm test                 # six suites, 842 assertions
 npm run lint             # eslint
 npm run typecheck        # tsc --noEmit, source and tests
 npm run format:check     # prettier
