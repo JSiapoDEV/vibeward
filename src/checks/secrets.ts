@@ -371,6 +371,8 @@ function evidenceOf(raw: string, extra: Record<string, string>): string {
   return extra.snippet ?? extra.key ?? (extra.role ? `JWT role=${extra.role}` : mask(raw));
 }
 
+const OWN_EXPLOIT = new Set(['generic_secret_assign', 'firebase_web_api_key']);
+
 function buildFinding(
   pat: SecretPattern,
   raw: string,
@@ -385,15 +387,14 @@ function buildFinding(
     cwe: pat.cwe,
     source,
     evidence: evidenceOf(raw, extra),
-    exploit: pat.id === 'generic_secret_assign' ? pat.exploit : `${BUNDLE_EXPLOIT} ${pat.exploit}`,
+    // The "anyone can call the provider as you" preamble is right for a secret and wrong for
+    // the two patterns that exist precisely because the value may be fine to ship.
+    exploit: OWN_EXPLOIT.has(pat.id) ? pat.exploit : `${BUNDLE_EXPLOIT} ${pat.exploit}`,
     why: pat.why,
     references: pat.references,
     es: {
       label: pat.es.label,
-      exploit:
-        pat.id === 'generic_secret_assign'
-          ? pat.es.exploit
-          : `${BUNDLE_EXPLOIT_ES} ${pat.es.exploit}`,
+      exploit: OWN_EXPLOIT.has(pat.id) ? pat.es.exploit : `${BUNDLE_EXPLOIT_ES} ${pat.es.exploit}`,
       why: pat.es.why,
     },
   };
@@ -526,8 +527,63 @@ function* matchBearerTokens(text: string): Generator<RawMatch> {
   }
 }
 
+/**
+ * A Google API key that is a Firebase web app's `apiKey`.
+ *
+ * That key is public by design: the Firebase SDK needs it in the browser, it opens no data on
+ * its own — Security Rules do that — and a rotated key is just as visible as the old one. So
+ * "a Google key leaked, rotate it" is the wrong sentence twice over. The real question is what
+ * else the key can call: unrestricted, it works against every Google API enabled in the
+ * project, including paid ones. The finding asks for that, at the severity that matches.
+ */
+const FIREBASE_WEB_KEY: SecretPattern = {
+  id: 'firebase_web_api_key',
+  es: {
+    label: 'Clave web de Firebase — confirma que esté restringida',
+    exploit:
+      'Esta clave está hecha para ir en el navegador: el SDK de Firebase la necesita, y por sí sola no abre tus datos (eso lo deciden tus reglas de seguridad). El riesgo es qué más puede llamar: sin restricciones, cualquiera puede usarla contra cualquier API de Google activada en el proyecto, incluidas las de pago como Gemini o Maps, a tu costa.',
+    why: 'No la rotes: una clave nueva quedaría igual de visible. En Google Cloud Console → APIs y servicios → Credenciales, restríngela a tus sitios (referentes HTTP) y a las APIs que usa la web: Identity Toolkit y Token Service para el inicio de sesión, y Firebase Installations y FCM Registration si usa notificaciones. Después prueba que el inicio de sesión y las notificaciones sigan funcionando.',
+  },
+  label: 'Firebase web API key — confirm it is restricted',
+  severity: 'low',
+  check: 2,
+  cwe: 'CWE-284',
+  regex: /(?!)/g,
+  exploit:
+    'This key is meant to be in the browser: the Firebase SDK needs it, and on its own it opens none of your data — your Security Rules decide that. The risk is what else it can call: unrestricted, anyone can use it against any Google API enabled in the project, including paid ones like Gemini or Maps, on your bill.',
+  why: 'Do not rotate it: a new key would be just as visible. In Google Cloud Console → APIs & Services → Credentials, restrict it to your sites (HTTP referrers) and to the APIs the web app uses: Identity Toolkit and Token Service for sign-in, plus Firebase Installations and FCM Registration if it sends notifications. Then check that sign-in and notifications still work.',
+  references: [
+    'https://firebase.google.com/docs/projects/api-keys',
+    'https://cloud.google.com/docs/authentication/api-keys#adding-api-restrictions',
+  ],
+};
+
+/** What sits next to a Firebase web config, minified or not, in code or in a `.env`. */
+const FIREBASE_CONTEXT =
+  /firebaseapp\.com|messagingSenderId|MESSAGING_SENDER_ID|\bappId\b\s*:\s*["'`]1:\d+:web:/;
+
+/** How far around a key to look for its Firebase config. A config object is a few hundred bytes. */
+const FIREBASE_WINDOW = 600;
+
+function isFirebaseWebKey(text: string, index: number, length: number): boolean {
+  const around = text.slice(Math.max(0, index - FIREBASE_WINDOW), index + length + FIREBASE_WINDOW);
+  return FIREBASE_CONTEXT.test(around);
+}
+
+/** The literal a `generic_secret_assign` match assigns, quotes stripped. */
+function assignedLiteral(raw: string): string | null {
+  return /["'`]([^"'`]+)["'`]\s*$/.exec(raw)?.[1] ?? null;
+}
+
 function* matchSecrets(text: string): Generator<RawMatch> {
-  yield* matchBearerTokens(text);
+  // Every value a specific rule already named. The generic `api_key = "…"` rule exists for
+  // secrets nothing else recognises; firing it again on a key a vendor rule just reported is
+  // the same key counted twice, in two severities, with two different pieces of advice.
+  const named: string[] = [];
+  for (const match of matchBearerTokens(text)) {
+    named.push(match.raw);
+    yield match;
+  }
   const seen = new Set<string>();
   for (const pat of SECRET_PATTERNS) {
     pat.regex.lastIndex = 0;
@@ -540,12 +596,71 @@ function* matchSecrets(text: string): Generator<RawMatch> {
         if (!v) continue;
         extra = v;
       }
-      const key = `${pat.id}:${raw}`;
+      if (pat.id === 'generic_secret_assign') {
+        const literal = assignedLiteral(raw);
+        if (literal && named.some((v) => literal.includes(v) || v.includes(literal))) continue;
+      }
+      const found =
+        pat.id === 'google_api_key' && isFirebaseWebKey(text, m.index, raw.length)
+          ? FIREBASE_WEB_KEY
+          : pat;
+      const key = `${found.id}:${raw}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      yield { pat, raw, index: m.index, extra };
+      if (pat.id !== 'generic_secret_assign') named.push(raw);
+      yield { pat: found, raw, index: m.index, extra };
     }
   }
+}
+
+/** Every id a secret finding can carry, for the pass that folds one key found in many files. */
+export const SECRET_IDS = new Set<string>([
+  ...SECRET_PATTERNS.map((p) => p.id),
+  FIREBASE_WEB_KEY.id,
+  'hardcoded_bearer',
+]);
+
+/**
+ * One finding per key, wherever it appears.
+ *
+ * A key the build inlines lands in every chunk that imports it — the page bundle, the service
+ * worker, the shared vendor chunk — and each file used to be its own finding. Four "exposed
+ * key" lines for one key read as four leaks. The first place it was found stays the `source`;
+ * the rest are named in the evidence, so nobody has to wonder whether a file was missed.
+ */
+export function mergeRepeatedSecrets(findings: Finding[]): Finding[] {
+  const first = new Map<string, { finding: Finding; others: string[] }>();
+  const out: Finding[] = [];
+  for (const f of findings) {
+    if (!SECRET_IDS.has(f.id) || !f.evidence) {
+      out.push(f);
+      continue;
+    }
+    const key = `${f.id}\u0000${f.evidence}`;
+    const prior = first.get(key);
+    if (!prior) {
+      const copy = { ...f };
+      first.set(key, { finding: copy, others: [] });
+      out.push(copy);
+      continue;
+    }
+    if (f.source && f.source !== prior.finding.source && !prior.others.includes(f.source)) {
+      prior.others.push(f.source);
+    }
+  }
+  for (const { finding, others } of first.values()) {
+    if (others.length === 0) continue;
+    const shown = others.slice(0, 3).map((s) => s.replace(/^https?:\/\/[^/]+/, ''));
+    const more = others.length > 3 ? ` +${others.length - 3}` : '';
+    finding.evidence = `${finding.evidence} — also in ${shown.join(', ')}${more}`;
+    if (finding.es) {
+      finding.es = {
+        ...finding.es,
+        evidence: `${finding.evidence.split(' — also in ')[0]} — también en ${shown.join(', ')}${more}`,
+      };
+    }
+  }
+  return out;
 }
 
 /**

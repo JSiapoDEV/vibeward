@@ -2,7 +2,12 @@ import { buildPending, builderFromHost } from '../core/pending.js';
 import { fetchText } from '../http/client.js';
 import { discoverScripts, discoverChunksFromBundle } from '../http/discovery.js';
 import { crawlSite } from '../http/crawl.js';
-import { scanText, scanCrawledPages, extractSupabaseConfig } from '../checks/secrets.js';
+import {
+  scanText,
+  scanCrawledPages,
+  extractSupabaseConfig,
+  mergeRepeatedSecrets,
+} from '../checks/secrets.js';
 import { checkSourceMap } from '../checks/sourcemaps.js';
 import { checkHeaders } from '../checks/headers.js';
 import { checkPlainHttp } from '../checks/transport.js';
@@ -277,7 +282,11 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     });
     // What this crawl had no way to judge, measured from the crawl itself: one page cannot
     // have duplicate titles, and a page with no images cannot be missing alt text.
-    notEvaluated = webChecksNotEvaluated({ pages, assetsChecked: crawl.assetsChecked });
+    notEvaluated = webChecksNotEvaluated({
+      pages,
+      assetsChecked: crawl.assetsChecked,
+      notFoundRedirect: crawl.files.notFound.redirectedTo,
+    });
     const split = applySuppressions(web, cfg);
     suppressed = split.suppressed;
     findings.push(...split.kept);
@@ -474,6 +483,10 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
   }
 
   findings.push(...mixed.values());
+  // One key inlined into several bundles is one exposure, not one per file.
+  const merged = mergeRepeatedSecrets(findings);
+  findings.length = 0;
+  findings.push(...merged);
   cov.checked(
     AREA.mixedContent,
     args.noWeb

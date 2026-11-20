@@ -24,7 +24,16 @@ export interface SiteFiles {
   sitemapXml: string | null;
   faviconOk: boolean;
   /** Answer to an invented path: status + whether the HTML differs from the home. */
-  notFound: { status: number; distinct: boolean };
+  notFound: {
+    status: number;
+    distinct: boolean;
+    /**
+     * Where the invented path was sent, when that is another page — `/login`, typically. An
+     * app behind a sign-in redirects every unknown address there, and that says nothing about
+     * how it answers a bad link once you are signed in.
+     */
+    redirectedTo?: string;
+  };
 }
 
 export interface CrawlResult {
@@ -202,6 +211,19 @@ function normalizeForCompare(html: string): string {
  * length and a normalized prefix, which is enough to catch the case that matters: an
  * SPA serving the very same `index.html` for every unknown path. Pure — no network.
  */
+/**
+ * The path an invented URL ended up on, when it is a different page. A redirect to `/` is not
+ * counted: sending every bad link to the home page is the soft 404 the check exists for. A
+ * redirect that keeps the invented path (`/en/vibeward-404-probe…`) is a locale prefix, and
+ * the answer is still the site's answer to a bad link.
+ */
+export function redirectTarget(finalUrl: string | undefined): string | undefined {
+  if (!finalUrl || !URL.canParse(finalUrl)) return undefined;
+  const path = new URL(finalUrl).pathname;
+  if (path === '/' || path === '' || path.includes(NOT_FOUND_PROBE.slice(1))) return undefined;
+  return path;
+}
+
 export function looksLikeSamePage(a: string, b: string): boolean {
   const na = normalizeForCompare(a);
   const nb = normalizeForCompare(b);
@@ -279,7 +301,7 @@ async function runCrawl(result: CrawlResult, home: string, homeHtml: string): Pr
   // A probe that never got an answer proves nothing, so it is not held against the site.
   const distinct =
     probe.status === 0 || probe.status >= 400 || !looksLikeSamePage(probe.body, homeHtml);
-  files.notFound = { status: probe.status, distinct };
+  files.notFound = { status: probe.status, distinct, redirectedTo: redirectTarget(probe.finalUrl) };
 
   const fromSitemap = files.sitemapXml ? parseSitemapUrls(files.sitemapXml, host, MAX_PAGES) : [];
   const candidates = fromSitemap.length

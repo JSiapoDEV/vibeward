@@ -582,10 +582,22 @@ export const WEB_CHECKS: { id: string; label: string; es: string }[] = [
 export function webChecksNotEvaluated(input: {
   pages: PageSignals[];
   assetsChecked: number;
+  /** Where an invented URL was redirected, when that was another page. */
+  notFoundRedirect?: string;
 }): Map<string, CoverageLine> {
-  const { pages, assetsChecked } = input;
+  const { pages, assetsChecked, notFoundRedirect } = input;
   const reasons = new Map<string, CoverageLine>();
   const n = pages.length;
+
+  if (notFoundRedirect) {
+    reasons.set(
+      'web_missing_404',
+      coverage(
+        `an address that does not exist redirects to ${notFoundRedirect}, which looks like an app behind a sign-in — how it answers a bad link cannot be judged from outside. If it is one, "intent": { "siteType": "app" } in vibeward.json also skips the checks meant for public pages`,
+        `una dirección que no existe redirige a ${notFoundRedirect}, lo que parece una app detrás de un inicio de sesión: cómo responde a un enlace roto no se puede juzgar desde fuera. Si lo es, "intent": { "siteType": "app" } en vibeward.json también omite las comprobaciones pensadas para páginas públicas`,
+      ),
+    );
+  }
 
   if (n < 2) {
     reasons.set(
@@ -1124,7 +1136,7 @@ export function checkWeb(input: {
   }
 
   const probe = files.notFound;
-  if (probe.status > 0 && (probe.status < 400 || !probe.distinct)) {
+  if (!probe.redirectedTo && probe.status > 0 && (probe.status < 400 || !probe.distinct)) {
     findings.push({
       id: 'web_missing_404',
       es: {

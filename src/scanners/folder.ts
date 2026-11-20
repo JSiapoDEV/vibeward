@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, extname, basename, sep } from 'node:path';
-import { scanSource } from '../checks/secrets.js';
+import { mergeRepeatedSecrets, scanSource } from '../checks/secrets.js';
 import { scanBackendFile } from '../checks/backend.js';
 import { checkUploadValidation } from '../checks/uploads.js';
 import { analyzeMigrations } from '../checks/migrations.js';
@@ -161,7 +161,13 @@ export function scanFolder(root: string): FolderScan {
     }
   }
 
-  return { findings, filesScanned, migrations, supabaseContext, signals };
+  return {
+    findings: mergeRepeatedSecrets(findings),
+    filesScanned,
+    migrations,
+    supabaseContext,
+    signals,
+  };
 }
 
 /**

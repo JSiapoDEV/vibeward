@@ -121,6 +121,12 @@ export function checkHeaders(headers: Headers): Finding[] {
 
   for (const h of LEAKY_HEADERS) {
     const v = headers.get(h);
+    // `server` is judged only when it carries a version. `nginx`, `Netlify` or `Vercel` alone
+    // names something millions of sites run and points at no CVE in particular, and hiding
+    // the bare name takes an extra module on a server or is impossible on a host. A version
+    // number is the part an attacker can look up. `x-powered-by` stays: a framework adds it,
+    // and one line of config removes it.
+    if (h === 'server' && v && !/\d/.test(v)) continue;
     if (v && !/^(cloudflare|vercel)$/i.test(v)) {
       findings.push({
         id: `leaky_header_${h}`,

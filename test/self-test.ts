@@ -57,6 +57,8 @@ import {
 } from '../src/core/pending.js';
 import { ciSummary } from '../src/reporters/ci.js';
 import { checkCookies, checkMixedContent } from '../src/checks/browser.js';
+import { mergeRepeatedSecrets } from '../src/checks/secrets.js';
+import { redirectTarget } from '../src/http/crawl.js';
 import { contrastTrustCenter, parseTrustCenter } from '../src/checks/trust.js';
 import {
   normalizePageUrl,
@@ -3016,6 +3018,160 @@ console.log('\n43. Supabase from outside — who can sign up, and which function
     pending[0]?.id === 'review_public_rpcs' &&
       pending[0].files.join() === 'rpc/get_feed,rpc/exec_sql'.split(',').sort().join(),
     'every callable function becomes one review item',
+  );
+}
+
+console.log('\n44. What inflated a real report — one key four times, a public key called a leak');
+{
+  // Built at runtime so no key-shaped literal sits in the repository.
+  const key = ['AIza', 'Sy', 'Fake'.repeat(8), 'Q'].join('');
+  const firebaseConfig = `const c={apiKey:"${key}",authDomain:"demo-app.firebaseapp.com",projectId:"demo-app",messagingSenderId:"123456789",appId:"1:123456789:web:abc123"}`;
+  const ids = (fs: Finding[]) => fs.map((f) => f.id).join(',');
+
+  const fb = scanText(firebaseConfig, 'https://app.test/_next/static/chunks/login.js');
+  assert(
+    ids(fb) === 'firebase_web_api_key',
+    'a Firebase web config: one finding, not a Google key plus a generic one',
+  );
+  assert(fb[0]?.severity === 'low', 'low: the key is public by design');
+  assert(
+    /do not rotate/i.test(fb[0]?.why ?? '') && /referrers/i.test(fb[0]?.why ?? ''),
+    'it says to restrict the key, not to rotate it',
+  );
+  assert(
+    !/call the provider as you/.test(fb[0]?.exploit ?? ''),
+    'and drops the "anyone can call as you" preamble',
+  );
+  assert(!!fb[0]?.es?.why?.includes('No la rotes'), 'in Spanish too');
+  const guardAdvice = scanWriteMoment({
+    filePath: 'src/lib/firebase.ts',
+    content: firebaseConfig,
+  })[0];
+  assert(
+    guardAdvice?.id === 'firebase_web_api_key' &&
+      /Leave this key in the client/.test(guardAdvice.instead),
+    'the guard does not tell the agent to move a Firebase web key to the server',
+  );
+
+  const sw = `importScripts('firebase-messaging-compat.js');firebase.initializeApp({apiKey: '${key}', messagingSenderId: '123456789', projectId: 'demo-app'});`;
+  assert(
+    ids(scanText(sw, 'https://app.test/firebase-messaging-sw.js')) === 'firebase_web_api_key',
+    'the messaging service worker is recognised by its config too',
+  );
+
+  const env = `VITE_FIREBASE_API_KEY=${key}\nVITE_FIREBASE_AUTH_DOMAIN=demo-app.firebaseapp.com\n`;
+  assert(
+    ids(scanSource(env, '.env')) === 'firebase_web_api_key',
+    'and so is a .env holding the Firebase config',
+  );
+
+  const maps = `const MAPS = "${key}"; loadMaps(MAPS);`;
+  const plain = scanText(maps, 'bundle.js');
+  assert(
+    ids(plain) === 'google_api_key' && plain[0]?.severity === 'high',
+    'a Google key with no Firebase config around it is still the high finding',
+  );
+  assert(
+    ids(scanText(`const cfg = { apiKey: "${key}" }; maps(cfg)`, 'bundle.js')) === 'google_api_key',
+    'the generic rule stays quiet on a value a vendor rule already named',
+  );
+
+  const unknown = scanText('const conf = { secret: "q8Zt3vK1mN5pR7wX2yB4" }', 'bundle.js');
+  assert(
+    ids(unknown) === 'generic_secret_assign',
+    'the generic rule still fires on a value nothing else recognises',
+  );
+
+  // One key in several files is one finding that names them all.
+  const merged = mergeRepeatedSecrets([
+    ...scanText(firebaseConfig, 'https://app.test/_next/static/chunks/login.js'),
+    ...scanText(sw, 'https://app.test/firebase-messaging-sw.js'),
+    {
+      id: 'leaky_header_x-powered-by',
+      label: 'x',
+      severity: 'low',
+      why: '',
+      evidence: 'x-powered-by: Next.js',
+    },
+  ]);
+  assert(
+    merged.filter((f) => f.id === 'firebase_web_api_key').length === 1,
+    'two files, one finding',
+  );
+  const one = merged.find((f) => f.id === 'firebase_web_api_key')!;
+  assert(
+    one.source!.endsWith('login.js') && one.evidence!.includes('also in /firebase-messaging-sw.js'),
+    'the first file stays the source, the others are named in the evidence',
+  );
+  assert(one.es?.evidence?.includes('también en') === true, 'in both languages');
+  assert(
+    merged.some((f) => f.id === 'leaky_header_x-powered-by'),
+    'findings that are not secrets pass through',
+  );
+  const distinctKeys = mergeRepeatedSecrets([
+    ...scanText(maps, 'a.js'),
+    ...scanText(maps.replace(key, key.replace('Q', 'R')), 'b.js'),
+  ]);
+  assert(distinctKeys.length === 2, 'two different keys stay two findings');
+
+  // The server header, judged by its version.
+  const server = (v: string) =>
+    checkHeaders(new Headers({ server: v })).filter((f) => f.id === 'leaky_header_server');
+  assert(server('nginx').length === 0, 'server: nginx, no version — not a finding');
+  assert(server('Netlify').length === 0, 'server: Netlify — not a finding');
+  assert(
+    server('nginx/1.18.0 (Ubuntu)').length === 1,
+    'server: nginx/1.18.0 — the version is the finding',
+  );
+  assert(server('Apache/2.4.41').length === 1, 'server: Apache/2.4.41 — same');
+  assert(
+    checkHeaders(new Headers({ 'x-powered-by': 'Next.js' })).some(
+      (f) => f.id === 'leaky_header_x-powered-by',
+    ),
+    'x-powered-by still counts: one line of config removes it',
+  );
+
+  // An unknown address redirected to a sign-in page.
+  assert(redirectTarget('https://app.test/login') === '/login', 'a redirect to /login is recorded');
+  assert(
+    redirectTarget('https://app.test/') === undefined,
+    'a redirect to the home page is the soft 404 itself',
+  );
+  assert(
+    redirectTarget('https://app.test/en/vibeward-404-probe-7f3a91') === undefined,
+    'a locale prefix that keeps the path is not a redirect away',
+  );
+  assert(redirectTarget(undefined) === undefined, 'no final URL, nothing recorded');
+  const behindLogin = checkWeb({
+    pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+    files: goodFiles({ notFound: { status: 200, distinct: false, redirectedTo: '/login' } }),
+    brokenAssets: [],
+    jsBytes: 1000,
+    consoleErrors: [],
+  });
+  assert(
+    !behindLogin.some((f) => f.id === 'web_missing_404'),
+    'behind a login: no "fake 404" finding',
+  );
+  const softHome = checkWeb({
+    pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+    files: goodFiles({ notFound: { status: 200, distinct: false } }),
+    brokenAssets: [],
+    jsBytes: 1000,
+    consoleErrors: [],
+  });
+  assert(
+    softHome.some((f) => f.id === 'web_missing_404'),
+    'an SPA serving its home page for anything: still reported',
+  );
+  const why = webChecksNotEvaluated({
+    pages: [parsePage(goodHtml('/', 'Inicio'), 'https://x.test/')],
+    assetsChecked: 1,
+    notFoundRedirect: '/login',
+  }).get('web_missing_404');
+  assert(
+    !!why && why.en.includes('/login') && why.en.includes('siteType'),
+    'the report says why it was not judged, and how to declare an app',
   );
 }
 
