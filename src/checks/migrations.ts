@@ -22,6 +22,146 @@ export interface SqlFile {
 
 const LINTER = 'https://supabase.com/docs/guides/database/database-linter?lint=';
 
+// ─── Policies that let everyone through ────────────────────────────────────────────────────
+//
+// `USING (true)` is not one finding but two. On `FOR SELECT` it is how public content is
+// published — Supabase's own examples write "Public profiles are viewable by everyone" exactly
+// that way — and it only becomes a leak when the table holds something personal. On UPDATE,
+// DELETE or ALL it lets whoever it names rewrite every row, which is never what anyone meant.
+// Both get reported; only the second is critical, so a public blog does not fail a build.
+
+/** Roles no request from outside can hold. A policy only for these grants nothing to visitors. */
+const INTERNAL_ROLES = new Set([
+  'postgres',
+  'service_role',
+  'supabase_admin',
+  'supabase_auth_admin',
+  'supabase_storage_admin',
+  'supabase_functions_admin',
+  'supabase_realtime_admin',
+  'supabase_replication_admin',
+  'supabase_read_only_user',
+  'dashboard_user',
+  'authenticator',
+  'pgbouncer',
+]);
+
+export type PolicyCommand = 'select' | 'insert' | 'update' | 'delete' | 'all';
+
+export interface OpenPolicy {
+  table: string;
+  policy: string;
+  /** Lowercased; `all` when the policy does not say, which is Postgres's default. */
+  command: PolicyCommand;
+  /** Lowercased role names; `['public']` when the policy does not say. */
+  roles: string[];
+  source: string;
+  evidence: string;
+}
+
+const VERB: Record<PolicyCommand, [string, string]> = {
+  select: ['read', 'leer'],
+  insert: ['add rows to', 'agregar filas a'],
+  update: ['change', 'cambiar'],
+  delete: ['delete', 'borrar'],
+  all: ['read, change and delete', 'leer, cambiar y borrar'],
+};
+
+/**
+ * The finding for a policy that matches every row, or null when no outside caller holds any of
+ * its roles. Shared by the migration reader and the live-database export so both say the same.
+ */
+export function openPolicyFinding(p: OpenPolicy): Finding | null {
+  const reachable = p.roles.filter((r) => !INTERNAL_ROLES.has(r));
+  if (reachable.length === 0) return null;
+  const anyone = reachable.some((r) => r === 'public' || r === 'anon');
+  const signedIn = !anyone && reachable.includes('authenticated');
+  const who = anyone
+    ? 'anyone'
+    : signedIn
+      ? 'any signed-in user'
+      : `every member of ${reachable.join(', ')}`;
+  const quien = anyone
+    ? 'cualquiera'
+    : signedIn
+      ? 'cualquier usuario con sesión'
+      : `todo miembro de ${reachable.join(', ')}`;
+  const [verb, verbo] = VERB[p.command];
+  const readOnly = p.command === 'select';
+  return {
+    id: 'permissive_policy',
+    es: {
+      label: `La política \`${p.policy}\` deja a ${quien} ${verbo} todas las filas de \`${p.table}\``,
+      exploit: readOnly
+        ? `La política casa con todas las filas, así que ${quien} puede leer la tabla entera por la API pública.`
+        : `La política casa con todas las filas, así que ${quien} puede ${verbo} cualquier fila por la API pública, incluidas las de otros usuarios.`,
+      why: readOnly
+        ? 'Está bien si la tabla es contenido público a propósito — un blog, un menú, perfiles públicos. Si guarda algo personal, filtra por el propietario, por ejemplo `auth.uid() = user_id`.'
+        : 'Una política que siempre es verdadera es lo mismo que no tener política. Escribe la condición que describe quién puede tocar la fila, por ejemplo `auth.uid() = user_id`.',
+    },
+    label: `Policy \`${p.policy}\` lets ${who} ${verb} every row of \`${p.table}\``,
+    severity: readOnly ? 'medium' : 'critical',
+    check: 7,
+    cwe: 'CWE-863',
+    source: p.source,
+    evidence: p.evidence,
+    exploit: readOnly
+      ? `The policy matches every row, so ${who} can read the whole table through the public API.`
+      : `The policy matches every row, so ${who} can ${verb} any row through the public API, other users' included.`,
+    why: readOnly
+      ? 'Fine if the table is meant to be public content — a blog, a menu, public profiles. If it holds anything personal, filter by the owner, e.g. `auth.uid() = user_id`.'
+      : 'A policy that is always true is the same as no policy. Write the condition that describes who may touch the row, such as `auth.uid() = user_id`.',
+    references: ['https://supabase.com/docs/guides/database/postgres/row-level-security'],
+    meta: { table: p.table },
+  };
+}
+
+/** `(true)`, `((true))`, `(1=1)` — an expression that admits every row. */
+function alwaysTrue(expr: string): boolean {
+  return /^(?:true|1=1)$/i.test(expr.replace(/[\s()]/g, ''));
+}
+
+const CREATE_POLICY =
+  /\bcreate\s+policy\s+("[^"]+"|\w+)\s+on\s+((?:"[^"]+"|\w+)\s*\.\s*)?("[^"]+"|\w+)/gi;
+
+function analyzeOpenPolicies(files: SqlFile[]): Finding[] {
+  const findings: Finding[] = [];
+  for (const { path, content } of files) {
+    const text = blankComments(content);
+    CREATE_POLICY.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = CREATE_POLICY.exec(text)) !== null) {
+      const end = statementEnd(text, m.index);
+      // Everything after `ON table`, so a policy named "anyone to select" is not read as roles.
+      const rest = text.slice(m.index + m[0].length, end);
+      const head = cutAtKeyword(rest, ['using', 'with']);
+      if (/\bas\s+restrictive\b/i.test(head)) continue; // narrows others; grants nothing
+      const command = (/\bfor\s+(all|select|insert|update|delete)\b/i
+        .exec(head)?.[1]
+        ?.toLowerCase() ?? 'all') as PolicyCommand;
+      if (command === 'insert') continue; // no USING; an open insert is a form, not a leak
+      const usingAt = head.length;
+      if (!/^using\s*\(/i.test(rest.slice(usingAt))) continue;
+      const open = rest.indexOf('(', usingAt);
+      if (!alwaysTrue(rest.slice(open + 1, closingParen(rest, open)))) continue;
+      const roles = (/\bto\s+([\s\S]+?)\s*$/i.exec(head)?.[1] ?? 'public')
+        .split(',')
+        .map((r) => bareName(r.trim()) ?? '')
+        .filter(Boolean);
+      const finding = openPolicyFinding({
+        table: bareName(m[3]) ?? '',
+        policy: bareName(m[1]) ?? '',
+        command,
+        roles,
+        source: `${path}:${lineAt(content, m.index)}`,
+        evidence: text.slice(m.index, end).replace(/\s+/g, ' ').trim().slice(0, 160),
+      });
+      if (finding) findings.push(finding);
+    }
+  }
+  return findings;
+}
+
 // ─── Dynamic SQL a caller writes ────────────────────────────────────────────────────────────
 //
 // PostgREST serves every function in the exposed schema at `/rest/v1/rpc/<name>`, so a
@@ -438,7 +578,6 @@ const DROP_POLICY = new RegExp(
   'gi',
 );
 
-const PERMISSIVE_POLICY = /create\s+policy[\s\S]{0,240}?using\s*\(\s*true\s*\)/gi;
 const SECURITY_DEFINER = /security\s+definer/gi;
 const GRANT_TO_ANON =
   /grant\s+([\w, ]+?)\s+on\s+(?:table\s+)?(?:public\.)?["'`]?(\w+)["'`]?\s+to\s+(anon|public)\b/gi;
@@ -534,29 +673,6 @@ export function analyzeMigrations(
       });
     }
 
-    PERMISSIVE_POLICY.lastIndex = 0;
-    while ((m = PERMISSIVE_POLICY.exec(content)) !== null) {
-      findings.push({
-        id: 'permissive_policy',
-        es: {
-          label: 'Una política de Row Level Security permite a todo el mundo (`USING (true)`)',
-          exploit:
-            'Una política con `USING (true)` casa con todas las filas para todos los usuarios, así que RLS está desactivada de hecho en esta tabla.',
-          why: 'La política existe pero concede acceso a todo el mundo. Filtra por el propietario, por ejemplo `auth.uid() = user_id`.',
-        },
-        label: 'Row Level Security policy allows everyone (`USING (true)`)',
-        severity: 'critical',
-        check: 7,
-        cwe: 'CWE-863',
-        source: `${path}:${lineAt(content, m.index)}`,
-        evidence: m[0].replace(/\s+/g, ' ').slice(0, 120),
-        exploit:
-          'A policy with `USING (true)` matches every row for every user, so RLS is effectively off for this table.',
-        why: 'The policy exists but grants access to everyone. Filter by the owner, e.g. `auth.uid() = user_id`.',
-        references: ['https://supabase.com/docs/guides/database/postgres/row-level-security'],
-      });
-    }
-
     SECURITY_DEFINER.lastIndex = 0;
     while ((m = SECURITY_DEFINER.exec(content)) !== null) {
       findings.push({
@@ -607,6 +723,7 @@ export function analyzeMigrations(
     }
   }
 
+  findings.push(...analyzeOpenPolicies(files));
   findings.push(...analyzeDynamicSql(files, revokedRoles(files)));
   findings.push(...analyzeUserMetadataPolicies(files));
   findings.push(...analyzeViews(files, flagMissingRls));

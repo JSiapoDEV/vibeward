@@ -1,4 +1,5 @@
 import type { Finding } from '../core/types.js';
+import { openPolicyFinding, type PolicyCommand } from './migrations.js';
 import { scanReturnedData } from './secrets.js';
 
 // Supabase Row Level Security probe.
@@ -464,8 +465,9 @@ select jsonb_pretty(jsonb_build_object(
     where n.nspname = 'public' and c.relkind = 'r' and c.relrowsecurity = false
   ),
   'permissive_policies', (
-    select coalesce(jsonb_agg(jsonb_build_object('table', tablename, 'policy', policyname)), '[]'::jsonb)
-    from pg_policies where schemaname = 'public' and coalesce(qual, 'true') = 'true'
+    select coalesce(jsonb_agg(jsonb_build_object('table', tablename, 'policy', policyname, 'cmd', cmd, 'roles', roles)), '[]'::jsonb)
+    from pg_policies where schemaname = 'public' and permissive = 'PERMISSIVE'
+      and cmd <> 'INSERT' and coalesce(qual, 'true') = 'true'
   ),
   'security_definer_functions', (
     select coalesce(jsonb_agg(jsonb_build_object('function', p.proname) order by p.proname), '[]'::jsonb)
@@ -476,7 +478,8 @@ select jsonb_pretty(jsonb_build_object(
 
 interface SupabaseExport {
   tables_without_rls?: { table: string }[];
-  permissive_policies?: { table: string; policy: string }[];
+  /** `cmd` and `roles` arrived with 0.8.0; an export from an older query carries neither. */
+  permissive_policies?: { table: string; policy: string; cmd?: string; roles?: string[] }[];
   security_definer_functions?: { function: string }[];
 }
 
@@ -546,26 +549,20 @@ export function analyzeSupabaseExport(json: unknown): Finding[] {
   }
 
   for (const p of data.permissive_policies ?? []) {
-    findings.push({
-      id: 'permissive_policy',
-      es: {
-        label: `La política \`${p.policy}\` sobre \`${p.table}\` permite a todo el mundo`,
-        evidence: `La política "${p.policy}" tiene USING (true)`,
-        exploit:
-          'La política casa con todas las filas para todos los usuarios, así que RLS está desactivada de hecho en esta tabla.',
-        why: 'Filtra por el propietario, por ejemplo `auth.uid() = user_id`.',
-      },
-      label: `Policy \`${p.policy}\` on \`${p.table}\` allows everyone`,
-      severity: 'critical',
-      check: 7,
-      cwe: 'CWE-863',
+    // An export from the query before 0.8.0 has no command and could not tell an INSERT
+    // policy (which never has USING) from an open one. Read it as the worst case it claimed.
+    const cmd = (p.cmd ?? 'ALL').toLowerCase();
+    const finding = openPolicyFinding({
+      table: p.table,
+      policy: p.policy,
+      command: (['select', 'insert', 'update', 'delete'].includes(cmd)
+        ? cmd
+        : 'all') as PolicyCommand,
+      roles: (p.roles?.length ? p.roles : ['public']).map((r) => r.toLowerCase()),
       source: `supabase:public.${p.table}`,
-      evidence: `Policy "${p.policy}" has USING (true)`,
-      exploit:
-        'The policy matches every row for every user, so RLS is effectively off for this table.',
-      why: 'Filter by the owner instead, e.g. `auth.uid() = user_id`.',
-      references: ['https://supabase.com/docs/guides/database/postgres/row-level-security'],
+      evidence: `Policy "${p.policy}" (${p.cmd ?? 'command not exported'}) has USING (true)`,
     });
+    if (finding) findings.push(finding);
   }
 
   for (const fn of data.security_definer_functions ?? []) {

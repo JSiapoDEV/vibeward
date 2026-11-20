@@ -14,6 +14,7 @@ import {
   analyzeSupabaseExport,
   parseOpenApiTables,
   graphqlIntrospectionFinding,
+  SUPABASE_AUDIT_SQL,
 } from '../src/checks/supabase.js';
 import { toSarif } from '../src/reporters/sarif.js';
 import { scanIntent } from '../src/checks/intent.js';
@@ -2397,6 +2398,144 @@ console.log(
   assert(
     inline.some((r) => r.id === 'rls_user_metadata_orders'),
     'guard: a policy inside another kind of file is still read',
+  );
+}
+
+console.log('\n40. Open policies — what USING (true) lets through decides how bad it is');
+{
+  const open = (sql: string) =>
+    analyzeMigrations([{ path: 'supabase/migrations/0007.sql', content: sql }]).filter(
+      (f) => f.id === 'permissive_policy',
+    );
+  const severityOf = (sql: string) => open(sql).map((f) => f.severity);
+
+  // Public reads: how Supabase's own examples publish content. Reported, never critical — a
+  // blog must not fail a build. All four shapes appear in supabase/supabase's examples.
+  const READS: [string, string][] = [
+    [
+      'create policy "Public profiles are viewable by everyone." on public.profiles for select using (true);',
+      'the Supabase quickstart policy',
+    ],
+    [
+      'create policy "read" on "public"."page" as permissive for select to anon, authenticated using (true);',
+      'anon and authenticated, quoted schema',
+    ],
+    [
+      'create policy "allow anybody to select all meetups" on public.meetups\n  as permissive\n  for select\n  using (true);',
+      'over several lines, with "to" inside its name',
+    ],
+    ['create policy r on docs for select using ((true));', 'doubly parenthesised'],
+  ];
+  for (const [sql, why] of READS) {
+    assert(
+      JSON.stringify(severityOf(sql)) === '["medium"]',
+      `public read is medium, not critical: ${why}`,
+    );
+  }
+  const named = open(READS[2]![0])[0];
+  assert(
+    named?.label ===
+      'Policy `allow anybody to select all meetups` lets anyone read every row of `meetups`' &&
+      named.source === 'supabase/migrations/0007.sql:1' &&
+      Boolean(named.es?.label),
+    'names the policy and the table, says who and what, carries Spanish',
+  );
+  assert(
+    open('create policy r on notes for select to authenticated using (true);')[0]?.label.includes(
+      'any signed-in user',
+    ) === true,
+    'authenticated only reads as "any signed-in user"',
+  );
+
+  // Writes: every row rewritable by whoever the policy names. Critical, as before.
+  const WRITES: [string, string][] = [
+    ['create policy w on public.orders for update using (true);', 'UPDATE'],
+    ['create policy d on public.orders for delete to anon using (true);', 'DELETE for anon'],
+    ['create policy a on public.orders using (true);', 'no FOR, which Postgres reads as ALL'],
+    [
+      'create policy a on public.orders for all to authenticated using (true) with check (true);',
+      'ALL for any signed-in user',
+    ],
+  ];
+  for (const [sql, why] of WRITES) {
+    assert(JSON.stringify(severityOf(sql)) === '["critical"]', `open write is critical: ${why}`);
+  }
+
+  // Nothing to report.
+  const QUIET: [string, string][] = [
+    [
+      'create policy "allow auth admin to read user roles" on public.user_roles as permissive for select to supabase_auth_admin using (true);',
+      'an internal role no visitor holds',
+    ],
+    ['create policy svc on public.jobs for all to service_role using (true);', 'service_role'],
+    [
+      'create policy narrow on public.orders as restrictive for select using (true);',
+      'RESTRICTIVE, which only narrows the others',
+    ],
+    [
+      'create policy own on public.notes for select using (auth.uid() = user_id);',
+      'an owner condition',
+    ],
+    [
+      'create policy contact on public.messages for insert to anon with check (true);',
+      'an open INSERT: a contact form, not a leak',
+    ],
+    [
+      '-- create policy old on public.orders for update using (true);\nselect 1;',
+      'a policy in a comment',
+    ],
+  ];
+  for (const [sql, why] of QUIET) {
+    assert(open(sql).length === 0, `not an open policy: ${why}`);
+  }
+
+  // The old pattern searched 240 characters past one policy into the next and reported the
+  // first one's line. Each policy now ends at its own semicolon.
+  const pair = open(
+    'create policy own on public.notes for select using (auth.uid() = user_id);\ncreate policy w on public.notes for update using (true);',
+  );
+  assert(
+    pair.length === 1 && pair[0]!.source === 'supabase/migrations/0007.sql:2',
+    'an owner-scoped policy is not blamed for the open one after it',
+  );
+
+  // The live-database export says the same thing, from pg_policies.
+  const exported = (permissive_policies: unknown[]) =>
+    analyzeSupabaseExport({ vibeward_audit: { permissive_policies } }).filter(
+      (f) => f.id === 'permissive_policy',
+    );
+  assert(
+    exported([{ table: 'posts', policy: 'read', cmd: 'SELECT', roles: ['public'] }])[0]
+      ?.severity === 'medium',
+    'export: a public SELECT is medium',
+  );
+  assert(
+    exported([{ table: 'orders', policy: 'w', cmd: 'UPDATE', roles: ['authenticated'] }])[0]
+      ?.severity === 'critical',
+    'export: an open UPDATE is critical',
+  );
+  assert(
+    exported([{ table: 'jobs', policy: 'svc', cmd: 'ALL', roles: ['service_role'] }]).length === 0,
+    'export: an internal role is not reported',
+  );
+  assert(
+    exported([{ table: 'orders', policy: 'open' }])[0]?.severity === 'critical',
+    'export from the older query, with no command: read as the worst case it claimed',
+  );
+  assert(
+    SUPABASE_AUDIT_SQL.includes("cmd <> 'INSERT'") &&
+      SUPABASE_AUDIT_SQL.includes("permissive = 'PERMISSIVE'"),
+    'the export query no longer reads every INSERT policy as open',
+  );
+
+  // The guard's advice follows the severity.
+  const readAdvice = scanWriteMoment({
+    filePath: 'supabase/migrations/0007.sql',
+    content: READS[0]![0],
+  }).find((r) => r.id === 'permissive_policy');
+  assert(
+    /meant to be public/.test(readAdvice?.instead ?? ''),
+    'guard: a public read is told when it is fine, not told to rewrite it',
   );
 }
 

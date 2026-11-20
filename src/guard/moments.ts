@@ -76,8 +76,11 @@ function insteadFor(f: Finding): string {
   if (f.id.startsWith('policy_dropped_')) {
     return 'Check what policies remain on that table before applying this. A table with RLS on and no policy denies everyone, and the usual next step is to disable RLS rather than to write the policy back.';
   }
+  if (f.id === 'permissive_policy' && f.severity !== 'critical') {
+    return 'If the table is meant to be public content — posts, a menu, public profiles — this is fine. If it holds anything personal, replace `USING (true)` with the owner condition, `auth.uid() = user_id`.';
+  }
   if (f.id === 'permissive_policy') {
-    return 'Replace `USING (true)` with the condition that actually describes who may see the row — `auth.uid() = user_id` for owner-scoped data. A policy that is always true is the same as no policy.';
+    return 'Replace `USING (true)` with the condition that actually describes who may change the row — `auth.uid() = user_id` for owner-scoped data. A policy that is always true is the same as no policy.';
   }
   if (f.id.startsWith('dynamic_sql_')) {
     return 'Pass values into dynamic SQL with `EXECUTE … USING`, or quote them: `format()` with `%I` for names and `%L` for values. A function that executes whatever text it receives should not be callable through the API at all — revoke EXECUTE from `anon` and `authenticated`.';
