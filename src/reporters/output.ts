@@ -9,6 +9,8 @@ import type { Finding, SuppressedFinding } from '../core/types.js';
 import { localize, localizeFingerprint, coverageText } from '../core/i18n.js';
 import type { CoverageLine, Lang } from '../core/i18n.js';
 import { isComplete } from '../core/coverage.js';
+import { builderPrompt, type PendingItem } from '../core/pending.js';
+import { ciSummary } from './ci.js';
 import type { CoverageEntry } from '../core/coverage.js';
 import { C, log, todayISO } from '../core/terminal.js';
 import { VERSION, stalenessNotice } from '../core/version.js';
@@ -25,6 +27,10 @@ export interface FinishOptions {
   lang?: Lang;
   /** False in `--passive`: nothing beyond publicly-served assets was requested. */
   active?: boolean;
+  /** Also write the CI summary (run page, pinned issue) to this path. */
+  summary?: string;
+  /** The summary will be readable by anyone: count findings, never name or place them. */
+  publicSummary?: boolean;
 }
 
 /** Website context that only the URL scanner produces. */
@@ -35,6 +41,8 @@ export interface FinishExtras {
   notApplicable?: Map<string, CoverageLine>;
   notEvaluated?: Map<string, CoverageLine>;
   configPath?: string | null;
+  /** What is left for a person or an agent to judge. */
+  pending?: PendingItem[];
 }
 
 /**
@@ -48,6 +56,11 @@ const REPORT_STEM: Record<Lang, string> = { en: 'vibeward-report', es: 'informe'
 
 /**
  * Bumped whenever the `--stdout` payload changes shape. Agents can rely on it.
+ *
+ * 5 — a `pending` list and a `builderPrompt`. The work vibeward hands on — code it found
+ * and cannot judge, the builder's own AI scan, areas it did not look at — as fixed tasks with
+ * the files they are about. An agent reading the payload works through `pending` itself; a
+ * person without one pastes `builderPrompt` into Lovable, Bolt or v0.
  *
  * 4 — a `coverage` block. The markdown report has always distinguished "checked and clean"
  * from "never looked at"; the payload did not, so an agent reading `--stdout` — which is the
@@ -65,7 +78,7 @@ const REPORT_STEM: Record<Lang, string> = { en: 'vibeward-report', es: 'informe'
  * person needs is in `why`. Unrelated to the `schemaVersion` in `vibeward.json`, which is
  * the config format and is still 1.
  */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 /**
  * Writes every byte to stdout before returning, then the caller may exit.
@@ -136,7 +149,9 @@ export function finish(
     notApplicable: extras.notApplicable,
     notEvaluated: extras.notEvaluated,
     configPath: extras.configPath,
+    pending: extras.pending,
   });
+  const pending = extras.pending ?? [];
 
   const rows = (
     entries: CoverageEntry[],
@@ -193,7 +208,33 @@ export function finish(
       webChecks: group(webCoverage),
     },
     rls,
+    /** Fixed tasks for whoever reads this next: review, the builder's scan, unchecked areas. */
+    pending: pending.map((p) => ({
+      id: p.id,
+      kind: p.kind,
+      task: coverageText(p.task, lang),
+      why: coverageText(p.why, lang),
+      files: p.files,
+    })),
+    /** The same, as one message to paste into a builder's chat. Null when nothing is pending. */
+    builderPrompt: builderPrompt(localized, pending, lang),
   };
+
+  if (opts.summary) {
+    writeFileSync(
+      opts.summary,
+      ciSummary({
+        target,
+        dateISO,
+        lang,
+        verdict,
+        findings: localized,
+        pending,
+        publicRepo: opts.publicSummary === true,
+      }),
+      'utf8',
+    );
+  }
 
   // Machine mode: stdout carries the payload and nothing else. Report files are only
   // written when explicitly asked for, so an agent's working tree stays clean.

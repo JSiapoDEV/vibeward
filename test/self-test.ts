@@ -41,7 +41,17 @@ import {
 import { checkPlainHttp, followPlainHttp } from '../src/checks/transport.js';
 import { checkUploadValidation, hasFileInput } from '../src/checks/uploads.js';
 import { scanWriteMoment } from '../src/guard/moments.js';
-import { folderCoverage } from '../src/scanners/folder.js';
+import { folderCoverage, scanFolder } from '../src/scanners/folder.js';
+import {
+  buildPending,
+  builderFromFile,
+  builderFromHost,
+  builderPrompt,
+  collectSignals,
+  emptySignals,
+  pendingMarkdown,
+} from '../src/core/pending.js';
+import { ciSummary } from '../src/reporters/ci.js';
 import {
   normalizePageUrl,
   discoverInternalLinks,
@@ -76,7 +86,7 @@ import type { Moment } from '../src/guard/verdict.js';
 
 const ALL_MOMENTS: Moment[] = ['prompt', 'action', 'content'];
 import { RELEASED, VERSION, ageInDays, stalenessNotice } from '../src/core/version.js';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -2537,6 +2547,203 @@ console.log('\n40. Open policies — what USING (true) lets through decides how 
     /meant to be public/.test(readAdvice?.instead ?? ''),
     'guard: a public read is told when it is fine, not told to rewrite it',
   );
+}
+
+console.log('\n41. Pending — what vibeward hands on, the same way every run');
+{
+  // Which builder made the repository, from what each one leaves behind.
+  assert(
+    builderFromFile('package.json', '{"devDependencies":{"lovable-tagger":"^1"}}') === 'lovable',
+    'lovable-tagger in package.json: Lovable',
+  );
+  assert(builderFromFile('.bolt/prompt', null) === 'bolt', '.bolt/: Bolt');
+  assert(builderFromFile('.replit', null) === 'replit', '.replit: Replit');
+  assert(
+    builderFromFile('package.json', '{"name": "my-v0-project"}') === 'v0',
+    "v0's default package name: v0",
+  );
+  assert(
+    builderFromFile('package.json', '{"name": "shop", "dependencies": {"next": "15"}}') === null,
+    'a plain Next.js app is not guessed to be v0',
+  );
+  assert(
+    builderFromFile('apps/web/package.json', '{"devDependencies":{"lovable-tagger":"1"}}') === null,
+    'only the root package.json names the builder',
+  );
+  assert(builderFromHost('my-app.lovable.app') === 'lovable', 'host *.lovable.app: Lovable');
+  assert(
+    builderFromHost('my-app.vercel.app') === null,
+    'vercel.app is everyone, never v0 by guess',
+  );
+
+  // HTML sinks.
+  const sinks = emptySignals();
+  collectSignals(sinks, 'src/Post.tsx', '<div dangerouslySetInnerHTML={{ __html: body }} />');
+  collectSignals(sinks, 'src/Note.vue', '<div v-html="note.body"></div>');
+  collectSignals(sinks, 'src/Card.svelte', '<p>{@html card.text}</p>');
+  collectSignals(sinks, 'src/dom.ts', 'el.innerHTML = value;');
+  collectSignals(sinks, 'src/check.ts', 'if (el.innerHTML === "") return;');
+  collectSignals(sinks, 'src/Post.test.tsx', '<div dangerouslySetInnerHTML={{ __html: x }} />');
+  collectSignals(sinks, 'src/Safe.tsx', '<p>{post.body}</p>');
+  assert(sinks.htmlSinks.size === 4, 'React, Vue, Svelte and DOM sinks are collected');
+  assert(!sinks.htmlSinks.has('src/check.ts'), 'not a sink: comparing innerHTML');
+  assert(!sinks.htmlSinks.has('src/Post.test.tsx'), 'not app code: a test file');
+  assert(!sinks.htmlSinks.has('src/Safe.tsx'), 'not a sink: text rendered by React escapes itself');
+
+  // Server entry points and fetches built from the request.
+  const server = emptySignals();
+  const proxy =
+    'Deno.serve(async (req) => { const { url } = await req.json(); return fetch(url); });';
+  collectSignals(server, 'supabase/functions/proxy/index.ts', proxy);
+  collectSignals(
+    server,
+    'app/api/notes/route.ts',
+    'export async function GET(r: Request) { return Response.json({}) }',
+  );
+  collectSignals(server, 'src/actions.ts', "'use server';\nexport async function save() {}");
+  collectSignals(
+    server,
+    'app/api/rates/route.ts',
+    'const q = req.json(); await fetch("https://api.rates.test/v1")',
+  );
+  collectSignals(
+    server,
+    'src/components/Search.tsx',
+    'const r = await fetch(url, { body: req.body });',
+  );
+  assert(
+    server.serverEntry.size === 4,
+    'Edge Functions, route handlers and server actions are entry points',
+  );
+  assert(
+    !server.serverEntry.has('src/components/Search.tsx'),
+    'a component is not a server entry point',
+  );
+  assert(
+    server.dynamicFetch.has('supabase/functions/proxy/index.ts'),
+    'SSRF lead: fetches what the request sent',
+  );
+  assert(!server.dynamicFetch.has('app/api/rates/route.ts'), 'not SSRF: a fixed https:// address');
+
+  // The list.
+  const gap: CoverageEntry = {
+    id: 'supabase_rls',
+    status: 'not_evaluated',
+    detail: coverage('the live database was not probed', 'no se sondeó la base de datos en vivo'),
+  };
+  const signals = { ...server, htmlSinks: sinks.htmlSinks, builder: 'lovable' as const };
+  const items = buildPending({ scanned: [gap], signals });
+  assert(
+    items.map((i) => i.kind).join(',') === 'review,review,review,platform,unchecked',
+    'reviews first, then the builder, then what was not checked',
+  );
+  assert(
+    items.find((i) => i.id === 'platform_lovable')?.task.en.includes('Deep scan') === true,
+    'Lovable is sent to its Deep scan',
+  );
+  assert(
+    buildPending({ scanned: [gap], ignoreUnchecked: ['supabase_rls'] }).length === 0,
+    'a gap that is not worth a task here is left to the coverage section',
+  );
+  assert(
+    items.every((i) => i.files.length <= 8),
+    'files are capped',
+  );
+  assert(
+    buildPending({ scanned: [gap], signals })[0]!.files.join() === items[0]!.files.join(),
+    'the same scan gives the same list',
+  );
+
+  // The prompt.
+  const critical: Finding = {
+    id: 'rls_turned_off_notes',
+    label: 'RLS is switched off on `notes`',
+    severity: 'critical',
+    check: 6,
+    source: 'supabase/migrations/001.sql:2',
+    evidence: 'SECRET-EVIDENCE',
+    why: '',
+    exploit: '',
+  };
+  const web: Finding = {
+    ...critical,
+    id: 'web_missing_og',
+    label: 'No Open Graph',
+    kind: 'web',
+    severity: 'medium',
+  };
+  const prompt = builderPrompt([critical, web], items, 'en') ?? '';
+  assert(
+    prompt.includes('Do not change anything yet'),
+    'the prompt asks for an explanation before any edit',
+  );
+  assert(
+    prompt.includes('RLS is switched off') && !prompt.includes('Open Graph'),
+    'it names security findings, not website ones',
+  );
+  assert(
+    prompt.includes('supabase/functions/proxy/index.ts'),
+    'and the files each review is about',
+  );
+  assert(builderPrompt([], [], 'en') === null, 'nothing to say, no prompt');
+  assert(
+    builderPrompt([critical], items, 'es')?.startsWith('Un escáner') === true,
+    'the prompt follows --lang',
+  );
+
+  const md = pendingMarkdown([critical], items, 'en');
+  assert(
+    md.startsWith('## Pending') && md.includes('- [ ] **Review**'),
+    'the report has a checklist section',
+  );
+  assert(pendingMarkdown([], [], 'en') === '', 'and none when nothing is pending');
+
+  // The CI summary.
+  const base = {
+    target: '.',
+    dateISO: '2026-11-20',
+    lang: 'en' as const,
+    verdict: 'NOT READY',
+    pending: items,
+  };
+  const priv = ciSummary({ ...base, findings: [critical, web], publicRepo: false });
+  assert(
+    priv.startsWith('<!-- vibeward:summary findings=1 critical=1 pending=5 -->'),
+    'the first line is the marker the Action reads',
+  );
+  assert(
+    priv.includes('RLS is switched off') && priv.includes('supabase/migrations/001.sql:2'),
+    'private repository: each finding is named, with where it is',
+  );
+  const pub = ciSummary({ ...base, findings: [critical], publicRepo: true });
+  assert(
+    !pub.includes('RLS is switched off') && !pub.includes('001.sql'),
+    'public repository: no finding is named or placed — anyone can read the run page',
+  );
+  assert(
+    pub.includes('Security') && pub.includes('| 1 |'),
+    'it counts them and points to the Security tab',
+  );
+  assert(
+    !/switched off/.test(pub.slice(pub.indexOf('<details>'))),
+    'and the prompt names none either',
+  );
+  assert(
+    !priv.includes('SECRET-EVIDENCE') && !pub.includes('SECRET-EVIDENCE'),
+    'evidence, where a secret would be quoted, is never printed',
+  );
+
+  // End to end on a folder.
+  const dir = mkdtempSync(join(tmpdir(), 'vw-pending-'));
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'package.json'), '{"devDependencies":{"lovable-tagger":"1"}}');
+  writeFileSync(join(dir, 'src', 'Post.tsx'), '<div dangerouslySetInnerHTML={{ __html: b }} />');
+  const scanned = scanFolder(dir);
+  assert(
+    scanned.signals.builder === 'lovable' && scanned.signals.htmlSinks.has(join('src', 'Post.tsx')),
+    'a folder scan collects the builder and the sinks',
+  );
+  rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

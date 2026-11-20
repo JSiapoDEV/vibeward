@@ -28,7 +28,8 @@ name: vibeward
 on: [push, pull_request]
 
 permissions:
-  security-events: write   # required to upload SARIF
+  security-events: write   # upload SARIF
+  issues: write            # the pending-items issue
   contents: read
 
 jobs:
@@ -97,7 +98,8 @@ covered.
 
 ## 5. Secrets and permissions
 
-vibeward needs **no API key and no token of its own**. The only permission the workflow
-needs is `security-events: write`, and only to upload SARIF. If a setup seems to require a
+vibeward needs **no API key and no token of its own**. The workflow needs
+`security-events: write` to upload SARIF and `issues: write` for the pending-items issue
+(`issue: 'false'` drops the second). If a setup seems to require a
 secret, something else is being configured — stop and ask. Never create, name or commit a
 repository secret on the user's behalf.

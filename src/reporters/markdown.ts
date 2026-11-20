@@ -1,3 +1,4 @@
+import { pendingMarkdown, type PendingItem } from '../core/pending.js';
 import { isWeb } from '../core/types.js';
 import type { Finding, Severity, SuppressedFinding } from '../core/types.js';
 import { coverage, coverageText } from '../core/i18n.js';
@@ -35,6 +36,8 @@ export interface ReportInput {
   notEvaluated?: Map<string, CoverageLine>;
   /** Where the config came from, printed so a reader can go and check it. */
   configPath?: string | null;
+  /** Fixed tasks for a person or an agent, rendered before the next steps. */
+  pending?: PendingItem[];
 }
 
 export interface ReportOutput {
@@ -238,6 +241,7 @@ export function buildReport({
   notApplicable = new Map(),
   notEvaluated = new Map(),
   configPath,
+  pending = [],
 }: ReportInput): ReportOutput {
   const t = REPORT[lang];
   const security = findings.filter((f) => !isWeb(f));
@@ -370,6 +374,9 @@ export function buildReport({
     }
   }
   if (hasWeb && consoleChecked === false) md += `\n${t.playwrightNote}\n`;
+
+  const pendingSection = pendingMarkdown(findings, pending, lang);
+  if (pendingSection) md += `\n---\n\n${pendingSection}`;
 
   md += `\n---\n\n## ${t.nextStepsTitle}\n\n`;
   md += `${counts.critical > 0 ? t.nextStepsCritical : t.nextStepsNormal}\n\n`;

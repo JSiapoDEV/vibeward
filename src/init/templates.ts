@@ -201,6 +201,24 @@ export const INSTRUCTION = [
   'Never fill a gap yourself. If RLS was not evaluated, the answer is to re-run the scan with',
   'authorization, not to go and read the database, guess from the code, or reassure the user.',
   '',
+  '### `pending` — the part that needs someone to read the code',
+  '',
+  "Some questions fixed rules cannot settle: whether a visitor's text reaches an HTML sink,",
+  'whether a route checks that the record belongs to the caller, whether a server fetch takes',
+  'its URL from the request. vibeward lists those in `pending`, with the files they are about.',
+  'They are yours:',
+  '',
+  '- **`kind: "review"`** — read the listed files and answer the task. Report what you found',
+  "  as **your own reading**, separate from vibeward's findings and with the file and line, and",
+  '  say plainly when a file was fine. Same rule as security findings: report, do not edit.',
+  '- **`kind: "platform"`** — a step in the builder the app was made with (Lovable\'s Deep scan,',
+  "  Bolt's security audit). Tell the user; you cannot run it.",
+  '- **`kind: "unchecked"`** — the same gaps as `coverage.notEvaluated`. The rule above applies:',
+  '  say how to cover it, do not cover it by guessing.',
+  '',
+  '`builderPrompt` is the same list as one message, for a user who builds in Lovable, Bolt or v0',
+  'and has no agent of their own. Offer it when that is the case.',
+  '',
   '## 5. Split by kind',
   '',
   '**`kind: "security"`** (or no `kind` at all) — **do not fix these, ever, even if asked.**',
@@ -426,7 +444,8 @@ function ciBody(): string {
     'on: [push, pull_request]',
     '',
     'permissions:',
-    '  security-events: write   # required to upload SARIF',
+    '  security-events: write   # upload SARIF',
+    '  issues: write            # the pending-items issue',
     '  contents: read',
     '',
     'jobs:',
@@ -495,8 +514,9 @@ function ciBody(): string {
     '',
     '## 5. Secrets and permissions',
     '',
-    'vibeward needs **no API key and no token of its own**. The only permission the workflow',
-    'needs is `security-events: write`, and only to upload SARIF. If a setup seems to require a',
+    'vibeward needs **no API key and no token of its own**. The workflow needs',
+    '`security-events: write` to upload SARIF and `issues: write` for the pending-items issue',
+    "(`issue: 'false'` drops the second). If a setup seems to require a",
     'secret, something else is being configured — stop and ask. Never create, name or commit a',
     "repository secret on the user's behalf.",
   ].join('\n');
@@ -652,7 +672,8 @@ name: vibeward
 on: [push, pull_request]
 
 permissions:
-  security-events: write
+  security-events: write   # upload SARIF to the Security tab
+  issues: write            # keep the one "vibeward: pending" issue up to date
   contents: read
 
 jobs:
@@ -663,6 +684,8 @@ jobs:
       - uses: JSiapoDEV/vibeward@v${VERSION}
         with:
           path: '.'
+          # lang: es                     # summary, issue and report in Spanish
+          # issue: 'false'               # no pending-items issue, only the run summary
           # url: https://your-site.com   # also scan the deployed site (SEO / AI visibility)
           # supabase: audit.json         # a committed export from \`vibeward supabase-sql\`
           # fail-on-critical: 'false'    # report without failing the job

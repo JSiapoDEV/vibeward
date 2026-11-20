@@ -585,6 +585,8 @@ npm i -D playwright && npx playwright install chromium
 | `--supabase-url <url>` / `--anon-key <key>` | URL mode: Supabase config if not auto-detected |
 | `--no-rls` | URL mode: skip the Row-Level Security probe |
 | `--sarif <file>` | Write SARIF 2.1.0 (for GitHub code scanning) — security findings only |
+| `--summary <file>` | Write the CI summary: counts, what to fix, pending items, the builder prompt |
+| `--public-summary` | The summary will be public: count findings, never name or place them |
 | `--lang <en\|es>` | Report language, English by default. The CLI itself stays English |
 | `--out <file.md>` | Report path (default: `vibeward-report-<host>.md`, `informe-<host>.md` in Spanish) |
 | `--json` | Also dump raw findings as JSON |
@@ -596,14 +598,16 @@ never change it.
 
 ## GitHub Action
 
-Run vibeward on every push and see findings in the repo's **Security** tab:
+Run vibeward on every push. It is also the way in for apps built in **Lovable, Bolt or v0**: they
+sync to a GitHub repository, so the Action runs there with nothing to install on your machine.
 
 ```yaml
 # .github/workflows/vibeward.yml
 name: vibeward
 on: [push, pull_request]
 permissions:
-  security-events: write
+  security-events: write   # SARIF to the Security tab
+  issues: write            # the "vibeward: pending" issue
   contents: read
 jobs:
   scan:
@@ -613,11 +617,33 @@ jobs:
       - uses: JSiapoDEV/vibeward@v0.7.0
         with:
           path: '.'
+          # lang: es               # summary, issue and report in Spanish
           # supabase: audit.json   # optional: a committed Supabase export
 ```
 
-Findings upload as SARIF; the job fails on a critical finding (set `fail-on-critical: 'false'` to
-report without gating).
+Each run leaves three things:
+
+- **The run summary**, on the run page: counts, what to fix, what is **pending**, and a prompt
+  to paste into your builder.
+- **One issue**, `vibeward: pending`, updated on every push to the default branch and closed by
+  itself when nothing is left. Items you tick stay ticked. It reaches your GitHub notifications
+  and email, which is where someone who never opens the Security tab will see it.
+- **SARIF** in the Security tab. On a private repository that needs GitHub Code Security; when
+  the upload is refused, the job does not fail over it.
+
+**Pending** is what fixed rules cannot settle, written the same way on every run: HTML sinks a
+visitor's text might reach (XSS), server routes that must check whose record they serve (IDOR),
+server fetches that take their URL from the request (SSRF), your builder's own AI scan (Lovable's
+Deep scan, Bolt's security audit, v0's security check), and areas this run did not look at. No AI
+runs in the Action. The prompt hands the judging to your builder's AI, on your credits, and asks it
+to explain before it edits anything.
+
+**On a public repository**, the run page and the issue can be read by anyone. There the summary
+counts findings without naming them or saying where they are, and points to the Security tab,
+which only people with write access can open.
+
+The job fails on a critical finding (set `fail-on-critical: 'false'` to report without gating,
+or `issue: 'false'` to skip the issue).
 
 ## Development
 

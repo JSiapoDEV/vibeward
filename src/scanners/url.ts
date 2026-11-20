@@ -1,3 +1,4 @@
+import { buildPending, builderFromHost } from '../core/pending.js';
 import { fetchText } from '../http/client.js';
 import { discoverScripts, discoverChunksFromBundle } from '../http/discovery.js';
 import { crawlSite } from '../http/crawl.js';
@@ -406,13 +407,21 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     );
   }
 
+  const scanned = cov.entries();
+  const pending = buildPending({
+    scanned,
+    // From the address itself: the website pass that builds `fingerprint` may not have run.
+    builder: builderFromHost(URL.canParse(target) ? new URL(target).hostname : ''),
+  });
+
   finish(
     target,
     findings,
     rls,
-    cov.entries(),
+    scanned,
     { ...args, active: doActive },
     {
+      pending,
       fingerprint,
       consoleChecked,
       suppressed,

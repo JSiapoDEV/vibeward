@@ -7,6 +7,13 @@ import { analyzeMigrations } from '../checks/migrations.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { C, log } from '../core/terminal.js';
 import { AREA, ledger } from '../core/coverage.js';
+import {
+  buildPending,
+  builderFromFile,
+  collectSignals,
+  emptySignals,
+  type ReviewSignals,
+} from '../core/pending.js';
 import type { CoverageEntry } from '../core/coverage.js';
 import type { Args } from '../core/args.js';
 import type { Finding } from '../core/types.js';
@@ -58,6 +65,8 @@ export interface FolderScan {
   migrations: { path: string; content: string }[];
   /** Whether the project looks like a Supabase (direct-to-DB) app vs a server+ORM app. */
   supabaseContext: boolean;
+  /** What the pending review items are about: HTML sinks, server entry points, the builder. */
+  signals: ReviewSignals;
 }
 
 function collectFiles(dir: string): string[] {
@@ -98,6 +107,7 @@ export function scanFolder(root: string): FolderScan {
   const migrations: { path: string; content: string }[] = [];
   let filesScanned = 0;
   let supabaseContext = false;
+  const signals = emptySignals();
 
   for (const file of collectFiles(root)) {
     const rel = relative(root, file);
@@ -105,6 +115,8 @@ export function scanFolder(root: string): FolderScan {
     const ext = extname(file);
 
     if (rel.includes(`supabase${sep}`)) supabaseContext = true;
+    // Before the extension filter: `.replit` and `.bolt/` hold files no scanner reads.
+    signals.builder ??= builderFromFile(rel, base === 'package.json' ? read(file) : null);
 
     if (ext === '.sql') {
       const content = read(file);
@@ -128,6 +140,7 @@ export function scanFolder(root: string): FolderScan {
 
     findings.push(...scanSource(content, rel));
     findings.push(...scanBackendFile(rel, content));
+    collectSignals(signals, rel, content);
     const upload = checkUploadValidation(rel, content);
     if (upload) findings.push(upload);
 
@@ -148,7 +161,7 @@ export function scanFolder(root: string): FolderScan {
     }
   }
 
-  return { findings, filesScanned, migrations, supabaseContext };
+  return { findings, filesScanned, migrations, supabaseContext, signals };
 }
 
 /**
@@ -230,7 +243,7 @@ export function folderCoverage(input: {
 /** White-box: scan a local folder (code + Supabase migrations) plus an optional export. */
 export function runFolderScan(dir: string, args: Args): never {
   log(`${C.gray}▸ Scanning folder ${dir}…${C.reset}`);
-  const { findings, filesScanned, migrations, supabaseContext } = scanFolder(dir);
+  const { findings, filesScanned, migrations, supabaseContext, signals } = scanFolder(dir);
   log(
     `${C.gray}▸ ${filesScanned} file(s) scanned, ${migrations.length} SQL file(s) found${C.reset}`,
   );
@@ -246,5 +259,11 @@ export function runFolderScan(dir: string, args: Args): never {
     supabaseExport: Boolean(args.supabaseJson),
   });
 
-  finish(dir, findings, null, scanned, { ...args, active: false });
+  const pending = buildPending({
+    scanned,
+    signals,
+    ignoreUnchecked: supabaseContext ? [] : [AREA.supabaseRls],
+  });
+
+  finish(dir, findings, null, scanned, { ...args, active: false }, { pending });
 }

@@ -1,5 +1,5 @@
 name: 'vibeward'
-description: 'Security & website-quality scan for AI-generated / vibe-coded apps and sites (Supabase, Firebase, Lovable). Uploads results to the GitHub Security tab.'
+description: 'Security scan for AI-built apps (Supabase, Firebase, Lovable, Bolt, v0). Writes a run summary, keeps a pending-items issue and uploads SARIF.'
 branding:
   icon: 'shield'
   color: 'green'
@@ -19,6 +19,14 @@ inputs:
     default: ''
   fail-on-critical:
     description: 'Fail the job when a critical finding is present'
+    required: false
+    default: 'true'
+  lang:
+    description: 'Language of the summary, the issue and the report: en or es'
+    required: false
+    default: 'en'
+  issue:
+    description: 'Keep one open issue with what is pending, updated on each push to the default branch and closed when nothing is left. Needs `issues: write`.'
     required: false
     default: 'true'
 
@@ -48,6 +56,10 @@ runs:
         SCAN_PATH: ${{ inputs.path }}
         SUPABASE_EXPORT: ${{ inputs.supabase }}
         FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
+        REPORT_LANG: ${{ inputs.lang }}
+        # Unknown counts as public: naming a finding where anyone can read it is the mistake
+        # this has to avoid, and counting one where only the owner reads it costs little.
+        REPO_PRIVATE: ${{ github.event.repository.private }}
       run: |
         VERSION=$(node -p "require('$ACTION_PATH/package.json').version")
         echo "vibeward $VERSION"
@@ -57,6 +69,8 @@ runs:
           set -- scan "$SCAN_PATH" --sarif vibeward.sarif --yes
         fi
         if [ -n "$SUPABASE_EXPORT" ]; then set -- "$@" --supabase "$SUPABASE_EXPORT"; fi
+        set -- "$@" --lang "$REPORT_LANG" --summary vibeward-summary.md
+        if [ "$REPO_PRIVATE" != "true" ]; then set -- "$@" --public-summary; fi
         set +e
         npx --yes "vibeward@$VERSION" "$@"
         CODE=$?
@@ -65,8 +79,67 @@ runs:
         if [ "$FAIL_ON_CRITICAL" != "true" ]; then exit 0; fi
         exit $CODE
 
+    # The run page. Works on every repository and every plan, unlike the Security tab.
+    - name: Write the run summary
+      if: always()
+      shell: bash
+      run: |
+        if [ -s vibeward-summary.md ]; then cat vibeward-summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+    # One issue, always the same one, so it reaches the owner's notifications and email
+    # without a new issue per push. Only from the default branch — a feature branch is not
+    # what is deployed — and never on pull_request, where a fork's token cannot write issues.
+    # A permission error is a warning, not a failed build: the scan itself already ran.
+    - name: Update the pending-items issue
+      if: always() && inputs.issue == 'true' && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPORT_LANG: ${{ inputs.lang }}
+      run: |
+        [ -s vibeward-summary.md ] || exit 0
+        if [ "$REPORT_LANG" = "es" ]; then TITLE="vibeward: pendientes"; else TITLE="vibeward: pending"; fi
+        warn() { echo "::warning::vibeward could not update the \"$TITLE\" issue. Add \`issues: write\` to the workflow permissions, or set \`issue: 'false'\`."; exit 0; }
+
+        NUMBER=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" \
+          --json number,title --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty") || warn
+        OLD=""
+        if [ -n "$NUMBER" ]; then
+          OLD=$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body) || warn
+        fi
+
+        # Keep what the owner already ticked: an item still listed and checked before stays
+        # checked. Anything vibeward no longer sees is simply gone from the new list.
+        printf '%s' "$OLD" > vibeward-issue-old.md
+        node -e '
+          const fs = require("fs");
+          const old = fs.readFileSync("vibeward-issue-old.md", "utf8");
+          const done = new Set([...old.matchAll(/^- \[x\] (.*)$/gim)].map((m) => m[1]));
+          const body = fs.readFileSync("vibeward-summary.md", "utf8")
+            .split("\n")
+            .map((l) => { const m = /^- \[ \] (.*)$/.exec(l); return m && done.has(m[1]) ? "- [x] " + m[1] : l; })
+            .join("\n");
+          fs.writeFileSync("vibeward-issue.md", body);
+          process.stdout.write(String((body.match(/^- \[ \] /gm) || []).length));
+        ' > vibeward-open-count || warn
+        OPEN=$(cat vibeward-open-count)
+
+        if [ "$OPEN" = "0" ]; then
+          if [ -n "$NUMBER" ]; then
+            gh issue close "$NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Nothing left as of $GITHUB_SHA." || warn
+          fi
+        elif [ -n "$NUMBER" ]; then
+          gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file vibeward-issue.md || warn
+        else
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file vibeward-issue.md || warn
+        fi
+
+    # Code scanning on a private repository needs GitHub Code Security. Without it this upload
+    # fails, and the run summary and the issue above are where the results are read instead —
+    # so a refused upload must not turn a clean scan red.
     - name: Upload SARIF to the Security tab
       if: always()
+      continue-on-error: true
       uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
       with:
         sarif_file: vibeward.sarif
