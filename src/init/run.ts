@@ -10,7 +10,8 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, sep } from 'node:path';
-import type { Moment } from '../guard/verdict.js';
+import { DEFAULT_GUARD_LEVEL, isGuardLevel } from '../guard/verdict.js';
+import type { GuardLevel, Moment } from '../guard/verdict.js';
 import type { Choice } from '../core/prompt.js';
 import { isInteractive, multiselect, select } from '../core/prompt.js';
 import { C, confirm, log } from '../core/terminal.js';
@@ -26,6 +27,7 @@ export interface InitOptions {
   scope?: 'project' | 'user';
   targets?: string[];
   moments?: string[];
+  level?: GuardLevel;
   all?: boolean;
   yes?: boolean;
 }
@@ -102,7 +104,7 @@ function usage(): never {
     `${C.red}vibeward init needs a terminal to ask its questions.${C.reset}`,
     `${C.dim}Pass the answers instead:${C.reset}`,
     '',
-    `  vibeward init --scope project --targets claude-code,cursor --moments prompt,action --yes`,
+    `  vibeward init --scope project --targets claude-code,cursor --moments prompt,action --level medium --yes`,
     `  vibeward init --scope user --all --yes`,
     '',
     `${C.dim}Targets: ${TARGETS.map((t) => t.id).join(', ')}${C.reset}`,
@@ -161,6 +163,8 @@ export function mergeHookSettings(
   raw: string,
   rendered: Record<string, unknown>,
   guardCommand: string,
+  /** The person picked a level in this run, so an old `--level` must not ride along. */
+  levelChosen = false,
 ): { content: string; outcome: MergeOutcome } | null {
   let parsed: unknown;
   try {
@@ -215,7 +219,10 @@ export function mergeHookSettings(
         );
         if (upgraded) {
           carriedLegacy = true;
-          if (!carriedFlags) carriedFlags = upgraded.slice(guardCommand.length);
+          if (!carriedFlags) {
+            carriedFlags = upgraded.slice(guardCommand.length);
+            if (levelChosen) carriedFlags = carriedFlags.replace(/\s+--level(?:\s+\S+)?/g, '');
+          }
         }
       }
       // Drop OUR handlers out of the group, not the whole group. Several hosts let one matcher
@@ -315,7 +322,7 @@ function planJson(
     return row(target, file, 'skip', 'could not build the hook manifest', null);
   }
 
-  const merged = mergeHookSettings(current, manifest, ctx.guardCommand);
+  const merged = mergeHookSettings(current, manifest, ctx.guardCommand, ctx.levelChosen === true);
   if (merged === null) return row(target, file, 'skip', 'not valid JSON — left untouched', null);
   if (merged.outcome === 'unchanged') return row(target, file, 'skip', UP_TO_DATE, null);
   const events = Object.keys(asRecord(manifest.hooks) ?? {}).length;
@@ -391,6 +398,33 @@ async function askMoments(chosen: Target[]): Promise<Moment[] | null> {
   }));
   const picked = await multiselect('What should the guard watch?', choices);
   return picked === null ? null : (picked as Moment[]);
+}
+
+/**
+ * How often the guard may stop the person. Asked once, with `medium` preselected: the person
+ * this tool is for often starts the agent and walks away, and they should hear before
+ * installing that the guard can be told not to wait on them.
+ */
+async function askLevel(): Promise<GuardLevel | null> {
+  const picked = await select('When should the guard stop and ask you?', [
+    {
+      value: 'medium',
+      label: 'Only before a critical change (recommended)',
+      hint: 'everything else is a note to the agent, and a summary when it finishes',
+      selected: true,
+    },
+    {
+      value: 'warn',
+      label: 'Never — just warn',
+      hint: 'for runs you leave unattended; read the summary when the agent finishes',
+    },
+    {
+      value: 'high',
+      label: 'Before every flagged change',
+      hint: 'and refuse the critical ones outright',
+    },
+  ]);
+  return isGuardLevel(picked) ? picked : null;
 }
 
 function resolveTargets(ids: string[], scope: Scope): Target[] {
@@ -547,7 +581,21 @@ export async function runInit(opts: InitOptions): Promise<never> {
     moments = picked;
   }
 
-  const ctx = resolveGuardContext(guardable && moments.length > 0, scope, moments);
+  const guarded = guardable && moments.length > 0;
+  let level = opts.level;
+  if (!level && guarded && isInteractive() && !opts.all) {
+    const picked = await askLevel();
+    if (picked === null) cancelled();
+    level = picked;
+  }
+
+  const ctx = resolveGuardContext(guarded, scope, moments);
+  if (guarded && level) {
+    ctx.levelChosen = true;
+    // `medium` is the default, so it is left off the command: a project that later sets
+    // `guard.level` in its vibeward.json is then not overruled by a flag nobody chose.
+    if (level !== DEFAULT_GUARD_LEVEL) ctx.guardCommand = `${ctx.guardCommand} --level ${level}`;
+  }
 
   // Copilot CLI reads a repository's `.claude/settings.json` as well as its own manifest, so
   // installing both in one project registers the guard twice there — two processes and two

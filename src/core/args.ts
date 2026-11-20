@@ -43,6 +43,8 @@ export interface Args {
   moments?: string[];
   /** `init` only: every target available for the chosen scope. */
   all?: boolean;
+  /** `init` only: how often the guard may interrupt (`warn`, `medium`, `high`). */
+  level?: 'warn' | 'medium' | 'high';
 }
 
 export function parseArgs(argv: string[]): Args {
@@ -69,6 +71,9 @@ export function parseArgs(argv: string[]): Args {
       // An unknown language falls through to the English default rather than failing the
       // scan: the report is the point, and its language is a preference.
       if (isLang(v)) args.lang = v;
+    } else if (a === '--level') {
+      const v = argv[++i]?.toLowerCase();
+      if (v === 'warn' || v === 'medium' || v === 'high') args.level = v;
     } else if (a === '--scope') {
       const v = argv[++i];
       if (v === 'project' || v === 'user') args.scope = v;

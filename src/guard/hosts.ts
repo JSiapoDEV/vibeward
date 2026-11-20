@@ -26,6 +26,12 @@ export interface Incoming {
   source?: string;
   /** The host's own event name, echoed back in responses that require it. */
   event?: string;
+  /** The agent finished its turn: time for the summary, not for a check. */
+  end?: boolean;
+  /** Names the conversation, so the summary covers this session and no other. */
+  sessionId?: string;
+  /** The project the agent is working in, where its `vibeward.json` lives. */
+  cwd?: string;
 }
 
 /** What to print, and what to exit with. */
@@ -38,6 +44,13 @@ export interface Reply {
 export interface Adapter {
   read(payload: Record<string, unknown>): Incoming;
   reply(verdict: Verdict, incoming: Incoming): Reply;
+  /** The end-of-turn summary, for the person. Only on hosts with a `summary` event. */
+  summary?(text: string): Reply;
+}
+
+/** Claude Code and Codex both show `systemMessage` to the person and do not resume the agent. */
+function systemMessage(text: string): Reply {
+  return { stdout: JSON.stringify({ systemMessage: text }), code: 0 };
 }
 
 const CLEAN: Reply = { code: 0 };
@@ -107,7 +120,12 @@ const SHELL_TOOL =
  * `tool_name` / `tool_input` / `tool_response`, and both read `hookSpecificOutput`.
  */
 function readClaudeLike(p: Record<string, unknown>): Incoming {
+  return { ...readClaudeEvent(p), sessionId: str(p.session_id), cwd: str(p.cwd) };
+}
+
+function readClaudeEvent(p: Record<string, unknown>): Incoming {
   const event = str(p.hook_event_name) ?? '';
+  if (/^Stop$/i.test(event)) return { moment: null, end: true, event };
   const toolName = str(p.tool_name) ?? '';
   const input = obj(p.tool_input);
 
@@ -189,6 +207,7 @@ const claudeCode: Adapter = {
       code: 0,
     };
   },
+  summary: systemMessage,
 };
 
 const codex: Adapter = {
@@ -214,6 +233,7 @@ const codex: Adapter = {
       code: 0,
     };
   },
+  summary: systemMessage,
 };
 
 const cursor: Adapter = {
@@ -265,9 +285,13 @@ const cursor: Adapter = {
       };
     }
     if (incoming.moment === 'action') {
+      // A note is an `allow` that still carries the message, so the level the person chose
+      // decides whether Cursor stops them, not this adapter. Same keys either way: a reply
+      // that does not match Cursor's schema blocks the action outright.
+      const permission = v.action === 'deny' ? 'deny' : v.action === 'ask' ? 'ask' : 'allow';
       return {
         stdout: JSON.stringify({
-          permission: v.action === 'deny' ? 'deny' : 'ask',
+          permission,
           user_message: humanNote(v),
           agent_message: modelNote(v),
         }),
@@ -304,7 +328,9 @@ const copilot: Adapter = {
   reply(v, incoming) {
     if (incoming.moment === 'action') {
       // `permissionDecisionReason` is the only text that reaches the model here, and only on
-      // a denial — so on this host a warning has to become an ask, or be silent.
+      // a denial — so on this host a warning has to become an ask, or be silent. Which one is
+      // the level's call: a note means the person chose not to be interrupted for this.
+      if (v.action === 'note') return CLEAN;
       return {
         stdout: JSON.stringify({
           permissionDecision: v.action === 'deny' ? 'deny' : 'ask',

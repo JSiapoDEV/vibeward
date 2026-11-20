@@ -9,11 +9,17 @@
 // The payloads below are shaped from each vendor's own documentation. When one of these starts
 // failing, the fix is to re-read the `docs` URL in capabilities.ts for that host — not to
 // loosen the assertion.
-import { evaluate } from '../src/guard/run.js';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { endOfTurn, evaluate, resolveLevel } from '../src/guard/run.js';
+import { remember, summaryText, takeSeen, type Seen } from '../src/guard/session.js';
+import { parseConfig } from '../src/core/config.js';
+import { mergeHookSettings } from '../src/init/run.js';
 import { detectHost } from '../src/guard/hosts.js';
 import { HOSTS, findHost } from '../src/init/capabilities.js';
 import { hookFile, isSharedSettings } from '../src/init/hooks.js';
-import type { Moment } from '../src/guard/verdict.js';
+import type { GuardLevel, Moment } from '../src/guard/verdict.js';
 
 let pass = 0;
 let fail = 0;
@@ -400,6 +406,224 @@ console.log('\nHost conformance — regressions found by adversarial review\n');
     }
     assert(!threw, `a malformed payload does not throw (${JSON.stringify(hostile).slice(0, 44)})`);
   }
+}
+
+console.log('\nGuard levels — when the person is stopped, and when only the agent is told\n');
+{
+  // A critical action (RLS switched off) and a medium one (`--no-verify`), on Claude Code.
+  const critical = {
+    hook_event_name: 'PreToolUse',
+    permission_mode: 'default',
+    tool_name: 'Bash',
+    tool_input: { command: RISKY_CMD },
+  };
+  const medium = {
+    hook_event_name: 'PreToolUse',
+    permission_mode: 'default',
+    tool_name: 'Bash',
+    tool_input: { command: 'git commit --no-verify -m wip' },
+  };
+  const decision = (payload: Record<string, unknown>, level: GuardLevel): string => {
+    const out = evaluate(payload, { host: 'claude-code', level });
+    const wire = JSON.parse(out.stdout ?? '{}') as {
+      hookSpecificOutput?: { permissionDecision?: string; additionalContext?: string };
+    };
+    return wire.hookSpecificOutput?.permissionDecision ?? 'note';
+  };
+
+  assert(
+    evaluate(medium, { host: 'claude-code' }).verdict.risks[0]?.severity === 'medium',
+    'a skipped verification is a medium risk',
+  );
+  assert(decision(critical, 'warn') === 'note', 'warn: a critical action does not stop the run');
+  assert(decision(medium, 'warn') === 'note', 'warn: a medium action does not stop the run');
+  assert(decision(critical, 'medium') === 'ask', 'medium: a critical action asks the person');
+  assert(decision(medium, 'medium') === 'note', 'medium: a medium action only tells the agent');
+  assert(decision(critical, 'high') === 'deny', 'high: a critical action is refused');
+  assert(decision(medium, 'high') === 'ask', 'high: every flagged action asks');
+  assert(decision(critical, undefined as never) === 'ask', 'no level given means medium');
+
+  const noted = evaluate(medium, { host: 'claude-code', level: 'medium' });
+  assert(
+    (noted.stdout ?? '').includes('additionalContext') &&
+      (noted.stdout ?? '').includes('vibeward-security-guardrail'),
+    'a note still reaches the model with the full explanation',
+  );
+
+  const prompt = {
+    hook_event_name: 'UserPromptSubmit',
+    prompt_id: 'x',
+    permission_mode: 'default',
+    prompt: RISKY_PROMPT,
+  };
+  assert(
+    evaluate(prompt, { host: 'claude-code', level: 'high' }).code === 2,
+    'high: a critical prompt is stopped',
+  );
+  assert(
+    evaluate(prompt, { host: 'claude-code', level: 'medium' }).code === 0,
+    'medium: a critical prompt is only noted',
+  );
+  const cors = { ...prompt, prompt: 'allow all origins with CORS * so the fetch works' };
+  const corsOut = evaluate(cors, { host: 'claude-code', level: 'high' });
+  assert(
+    corsOut.verdict.risks.length > 0 && corsOut.code === 0,
+    'high: a non-critical prompt is still only noted',
+  );
+
+  // Hosts whose action event cannot carry a note: the level decides between asking and silence.
+  const cursorNote = evaluate(
+    { command: 'git commit --no-verify -m wip', cwd: '/p', sandbox: false },
+    { host: 'cursor', level: 'medium' },
+  );
+  assert(
+    (cursorNote.stdout ?? '').includes('"permission":"allow"'),
+    'cursor: a note is an allow that still carries agent_message',
+  );
+  const copilotNote = evaluate(
+    {
+      hook_event_name: 'preToolUse',
+      tool_name: 'bash',
+      tool_input: { command: 'git commit --no-verify' },
+    },
+    { host: 'copilot', level: 'medium' },
+  );
+  assert(!copilotNote.stdout, 'copilot: a note it cannot carry is silence, not a dialog');
+  const copilotAsk = evaluate(
+    { hook_event_name: 'preToolUse', tool_name: 'bash', tool_input: { command: RISKY_CMD } },
+    { host: 'copilot', level: 'medium' },
+  );
+  assert((copilotAsk.stdout ?? '').includes('"ask"'), 'copilot: a critical action still asks');
+}
+
+console.log('\nGuard levels — where the level comes from\n');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'vw-level-'));
+  assert(resolveLevel({}, dir) === 'medium', 'no flag and no file: medium');
+  writeFileSync(join(dir, 'vibeward.json'), JSON.stringify({ guard: { level: 'warn' } }));
+  assert(resolveLevel({}, dir) === 'warn', 'guard.level in vibeward.json applies');
+  assert(resolveLevel({ level: 'high' }, dir) === 'high', 'the hook flag beats the file');
+  writeFileSync(join(dir, 'vibeward.json'), JSON.stringify({ guard: { level: 'paranoid' } }));
+  assert(resolveLevel({}, dir) === 'medium', 'an unknown level falls back to medium');
+  rmSync(dir, { recursive: true, force: true });
+
+  const bad = parseConfig(JSON.stringify({ guard: { level: 'paranoid', mode: 1 } }));
+  assert(bad.config.guard === undefined, 'an unknown level is not kept');
+  assert(
+    bad.warnings.some((w) => w.includes('guard.level')) &&
+      bad.warnings.some((w) => w.includes('guard.mode')),
+    'and both mistakes are reported',
+  );
+  const good = parseConfig(JSON.stringify({ guard: { level: 'high' } }));
+  assert(
+    good.config.guard?.level === 'high' && good.warnings.length === 0,
+    'guard.level is a known key, not an "unknown key" warning',
+  );
+}
+
+console.log('\nEnd-of-turn summary — what the person reads when they come back\n');
+{
+  const base = mkdtempSync(join(tmpdir(), 'vw-session-'));
+  const session = 'session-1';
+  const risk = (id: string, severity: Seen['severity'], source = 'shell command') => ({
+    id,
+    risk: `risk ${id}`,
+    why: '',
+    instead: '',
+    source,
+    severity,
+  });
+  remember(
+    session,
+    { moment: 'action', action: 'note', risks: [risk('medium-one', 'medium')] },
+    base,
+  );
+  remember(session, { moment: 'action', action: 'ask', risks: [risk('crit', 'critical')] }, base);
+  remember(session, { moment: 'action', action: 'note', risks: [risk('crit', 'critical')] }, base);
+  remember('other-session', { moment: 'action', action: 'note', risks: [risk('x', 'high')] }, base);
+
+  const seen = takeSeen(session, base);
+  assert(seen.length === 3, 'every match of this session is read back');
+  assert(takeSeen(session, base).length === 0, 'and only once: the next turn starts empty');
+  assert(takeSeen('other-session', base).length === 1, 'another session keeps its own');
+
+  const text = summaryText(seen, 'medium') ?? '';
+  const lines = text.split('\n');
+  assert(
+    lines[0]!.includes('2 things') && lines[0]!.includes('1 critical'),
+    'the head line counts distinct problems, not repeats',
+  );
+  assert(
+    lines[1]!.includes('critical') && lines[1]!.includes('×2'),
+    'the critical one comes first, folded with its repeat',
+  );
+  assert(lines[1]!.includes('you were asked'), 'and keeps the strongest thing that happened');
+  assert(text.includes('vibeward.json'), 'the summary says where the level is changed');
+  assert(summaryText([], 'medium') === null, 'a quiet turn prints nothing');
+
+  const claude = findHost('claude-code')!;
+  const out = endOfTurn(claude, seen, 'medium');
+  const wire = JSON.parse(out.stdout ?? '{}') as Record<string, unknown>;
+  assert(
+    typeof wire.systemMessage === 'string' && Object.keys(wire).length === 1,
+    'claude-code: the summary is a systemMessage and nothing that would resume the agent',
+  );
+  assert(!endOfTurn(claude, [], 'medium').stdout, 'claude-code: nothing flagged, nothing printed');
+  assert(
+    !endOfTurn(findHost('cursor')!, seen, 'medium').stdout,
+    'cursor: no summary, because its stop event can only submit a new prompt',
+  );
+
+  const stop = evaluate({
+    hook_event_name: 'Stop',
+    session_id: 'abc',
+    cwd: '/p',
+    permission_mode: 'default',
+    stop_hook_active: false,
+  });
+  assert(
+    stop.incoming.end === true && stop.incoming.sessionId === 'abc',
+    'a Stop payload is read as the end of the turn, with its session',
+  );
+  assert(!stop.stdout && stop.code === 0, 'and is never scanned as if it were a prompt');
+  rmSync(base, { recursive: true, force: true });
+}
+
+console.log('\nEnd-of-turn summary — installed where the host can show it\n');
+{
+  const claudeHooks = hookFile(findHost('claude-code')!, CTX, ALL);
+  assert(claudeHooks.includes('"Stop"'), 'claude-code: init registers Stop');
+  const codexHooks = hookFile(findHost('codex')!, CTX, ALL);
+  assert(codexHooks.includes('"Stop"'), 'codex: init registers Stop');
+  const cursorHooks = hookFile(findHost('cursor')!, CTX, ALL);
+  assert(!/"stop"/i.test(cursorHooks), 'cursor: init does not register stop');
+  const skillOnly = hookFile(findHost('claude-code')!, CTX, []);
+  assert(!skillOnly.includes('"Stop"'), 'no guarded moment, no summary hook');
+  const plugin = readFileSync(join(import.meta.dirname, '..', 'hooks', 'hooks.json'), 'utf8');
+  assert(plugin.includes('"Stop"'), 'the Claude Code plugin registers Stop too');
+
+  // Re-running init with a new level must not keep the old one behind it.
+  const old = JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        { hooks: [{ type: 'command', command: 'npx vibeward@0.1.0 guard --level warn --block' }] },
+      ],
+    },
+  });
+  const rendered = {
+    hooks: {
+      PreToolUse: [
+        { hooks: [{ type: 'command', command: 'npx vibeward@9.9.9 guard --level high' }] },
+      ],
+    },
+  };
+  const merged = mergeHookSettings(old, rendered, 'npx vibeward@9.9.9 guard --level high', true);
+  assert(
+    !!merged &&
+      merged.content.includes('guard --level high --block') &&
+      !merged.content.includes('--level warn'),
+    'a level chosen now replaces the old one; other flags are kept',
+  );
 }
 
 console.log('\nHost conformance — every host in the table is reachable\n');

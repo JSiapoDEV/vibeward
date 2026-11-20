@@ -13,6 +13,7 @@ import { C, log } from './core/terminal.js';
 import { runUrlScan } from './scanners/url.js';
 import { runFolderScan } from './scanners/folder.js';
 import { runGuard } from './guard/run.js';
+import { isGuardLevel } from './guard/verdict.js';
 import { findHost } from './init/capabilities.js';
 import { SUPABASE_AUDIT_SQL } from './checks/supabase.js';
 
@@ -45,6 +46,9 @@ function usage(): void {
     `  vibeward init [--scope project|user] [--targets a,b] [--moments a,b]   install the skill + guard`,
   );
   log(
+    `${C.dim}      --level:   warn | medium (default) | high — how often the guard may stop you${C.reset}`,
+  );
+  log(
     `${C.dim}      --targets: ${'claude-code, codex, cursor, copilot, gemini, windsurf, opencode,'}${C.reset}`,
   );
   log(`${C.dim}                 claude-md, agents-md, gh-action${C.reset}`);
@@ -53,13 +57,16 @@ function usage(): void {
     `  vibeward supabase-sql                                                  print the read-only audit query`,
   );
   log(
-    `  vibeward guard [--host h] [--block]                                    hook: gate risk (reads stdin)`,
+    `  vibeward guard [--host h] [--level l] [--block]                        hook: gate risk (reads stdin)`,
   );
   log(
     `${C.dim}      the host and the moment come from the payload; --host only for hosts that send neither${C.reset}`,
   );
   log(
-    `${C.dim}      default: warns the agent in-context (exit 0); --block stops a risky prompt instead${C.reset}\n`,
+    `${C.dim}      default (medium): warns the agent in-context and asks you only before a critical change;${C.reset}`,
+  );
+  log(
+    `${C.dim}      the level comes from --level, else "guard": {"level"} in vibeward.json; --block stops every risky prompt${C.reset}\n`,
   );
   log(`${C.dim}Example:  vibeward https://client-app.lovable.app --yes${C.reset}`);
 }
@@ -87,9 +94,14 @@ async function main(): Promise<void> {
     // wants a hard stop — off by default, because a blocked prompt is a lost paragraph.
     const flag = argv.indexOf('--host');
     const named = flag >= 0 ? (argv[flag + 1] ?? '') : '';
+    const levelAt = argv.indexOf('--level');
+    const level = levelAt >= 0 ? argv[levelAt + 1] : undefined;
     await runGuard({
       host: findHost(named)?.id,
       block: argv.includes('--block'),
+      // An unknown level is dropped rather than refused: the hook must run, and the file or
+      // the default still applies.
+      level: isGuardLevel(level) ? level : undefined,
     });
   }
   if (cmd === 'init') {
@@ -101,6 +113,7 @@ async function main(): Promise<void> {
       scope: args.scope,
       targets: args.targets,
       moments: args.moments,
+      level: args.level,
       all: args.all,
       yes: args.yes,
     });

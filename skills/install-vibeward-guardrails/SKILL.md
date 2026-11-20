@@ -77,6 +77,17 @@ By default a match **warns the agent in context and lets the turn continue** (ex
 Blocking is opt-in per install, because a blocked prompt is a lost paragraph and a
 guardrail people turn off protects nothing.
 
+How often the person is stopped is a level, asked by `init` (or `--level`):
+
+- **`warn`** — never stops anything. For runs left unattended.
+- **`medium`** (default) — asks only before a critical change the agent chose to make.
+- **`high`** — asks before every flagged change, refuses critical ones, stops a critical
+  prompt.
+
+At every level, Claude Code and Codex show the person a summary of what was flagged when
+the agent finishes its turn. A project can set its own level in `vibeward.json` with
+`{ "guard": { "level": "warn" } }`; a `--level` on the hook command wins over the file.
+
 ## 4. Report honestly what was installed
 
 `init` prints a summary of what each target can and cannot enforce, given the moments that
@@ -86,7 +97,7 @@ guard does not — and a summary that rounds "the skill loads here" up to "you a
 here" leaves someone believing in protection they do not have.
 
 Do not claim a moment was installed that the user declined, and do not describe the guard
-as blocking when it is set to warn.
+as blocking when it is set to warn, or as asking about every change when it is `medium`.
 
 ## 5. Claude Code — the plugin instead
 

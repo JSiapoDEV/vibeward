@@ -323,6 +323,36 @@ Add `--block` if you want the hard stop instead (`exit 2`): Claude Code then blo
 **and erases it**, which is the right trade for a small team with a strict policy and the wrong one
 for everyone else. `--warn` still works as an alias of the default for older `settings.json` files.
 
+### How often it stops you
+
+A guard that pauses an unattended run for an hour gets uninstalled. So you pick how often it may
+interrupt, and every level still tells the agent:
+
+| level | you send a prompt | the agent edits or runs something | end of the turn |
+|---|---|---|---|
+| `warn` | the agent is told | the agent is told; nothing waits on you | summary |
+| **`medium`** (default) | the agent is told | **asks you only before a critical change** | summary |
+| `high` | a critical prompt is stopped | asks before every flagged change; refuses a critical one | summary |
+
+The **summary** is what makes `warn` safe to use: when the agent finishes, Claude Code and Codex
+show you everything the guard flagged during the turn, worst first, and whether you were asked or
+only the agent was told. A quiet turn prints nothing.
+
+```text
+vibeward flagged 2 things while the agent worked — 1 critical:
+  • critical: This command switches off Row Level Security (shell command) — you were asked
+  • medium: This command turns off a verification step (shell command) — the agent was told
+```
+
+Set it per project in `vibeward.json`, or for every repo with `init --level`:
+
+```json
+{ "guard": { "level": "warn" } }
+```
+
+`--level` on the hook command wins over the file, so a repository you clone cannot lower a level
+you chose for yourself. No level approves anything on your behalf.
+
 ## Install it into your AI tools
 
 ### Claude Code: as a plugin
@@ -412,10 +442,10 @@ instead of four.
 
 | | you send a prompt | the agent edits or runs | the agent reads |
 |---|---|---|---|
-| **Claude Code** | warns | asks, with the reason | warns |
-| **Codex CLI** | warns | asks, with the reason | warns |
-| **Cursor** | ⚠️ can only block | asks, with the reason | warns |
-| **Copilot CLI** ¹ | ❌ output is discarded | asks, reason only on deny | warns |
+| **Claude Code** | warns | warns; asks before a critical change ² | warns |
+| **Codex CLI** | warns | warns; asks before a critical change ² | warns |
+| **Cursor** | ⚠️ can only block | warns; asks before a critical change ² | warns |
+| **Copilot CLI** ¹ | ❌ output is discarded | asks before a critical change ², reason only on deny | warns |
 | **Gemini CLI** | warns | ⚠️ deny only, no warning | warns |
 | **Windsurf / Devin** | ⚠️ blocks or nothing | ⚠️ blocks or nothing | ❌ display-only |
 | **opencode** | warns | blocks, with the reason | warns |
@@ -426,6 +456,8 @@ SKILL.md does reach VS Code and JetBrains agent mode, so installing the Copilot 
 IDE gives you the audit skill and **no guard at all**. `init` says so after it writes.
 
 [copilot-hooks]: https://docs.github.com/en/copilot/concepts/agents/hooks
+
+² At the default level, `medium`. See [how often it stops you](#how-often-it-stops-you).
 
 "Warns" means the note reaches the **model** and nothing is interrupted — a false positive costs
 one ignored paragraph. Where an editor cannot do that, vibeward **stays silent rather than

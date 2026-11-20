@@ -87,6 +87,8 @@ export interface VibewardConfig {
   schemaVersion?: number;
   intent?: VibewardIntent;
   suppress?: Suppression[];
+  /** How often the guard may interrupt: see `GuardLevel` in guard/verdict.ts. */
+  guard?: { level?: 'warn' | 'medium' | 'high' };
 }
 
 /** A finding that was produced, failed, and was silenced by config — never deleted. */

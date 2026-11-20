@@ -59,6 +59,13 @@ export interface Host {
   hooks: { project: string; user: string; format: HookFormat } | null;
   moments: Record<Moment, MomentSupport>;
   /**
+   * The event that fires when the agent finishes its turn, when the host can show the person a
+   * message from it. That is where the guard prints what it flagged while nobody was watching.
+   * Absent where no such event exists or where its output only reaches the model — Cursor's
+   * `stop` can only submit a follow-up prompt, which would put the agent back to work.
+   */
+  summary?: string;
+  /**
    * Anything true about this host that the moment table cannot express — most importantly,
    * when the skill and the guard reach different products under the same brand name. Printed
    * verbatim by `init`.
@@ -94,6 +101,7 @@ export const HOSTS: Host[] = [
           'The tool has already run by the time this fires, so a warning explains rather than prevents. Files the user pulls in with `@` are inlined without a tool call and are never seen.',
       },
     },
+    summary: 'Stop',
     docs: 'https://code.claude.com/docs/en/hooks',
   },
   {
@@ -111,6 +119,8 @@ export const HOSTS: Host[] = [
       action: { event: 'PreToolUse', canNote: true, canBlock: true },
       content: { event: 'PostToolUse', canNote: true, canBlock: true },
     },
+    // `systemMessage` on Stop is "surfaced as a warning in the UI or event stream".
+    summary: 'Stop',
     docs: 'https://learn.chatgpt.com/docs/hooks',
   },
   {

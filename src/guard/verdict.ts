@@ -5,6 +5,8 @@
 // is this, what did we find, and how hard should we push. Everything host-specific lives in
 // guard/hosts/*; nothing in this file knows a host exists.
 
+import type { Severity } from '../core/types.js';
+
 /**
  * The three moments risk enters an agent session.
  *
@@ -30,6 +32,30 @@ export type Moment = 'prompt' | 'action' | 'content';
  */
 export type Action = 'note' | 'ask' | 'deny';
 
+/**
+ * How often the guard may interrupt the person, chosen by them.
+ *
+ * `warn`   — never interrupts. Every match reaches the model as a note, and the person sees
+ *            them all in the summary at the end of the turn. For someone who leaves the agent
+ *            running and reviews afterwards.
+ * `medium` — the default. Asks before a CRITICAL change the agent chose to make; everything
+ *            else is a note plus the summary.
+ * `high`   — asks before any flagged change, refuses a critical one, and stops a critical
+ *            prompt.
+ *
+ * No level approves anything on the person's behalf. The softest answer is still a note the
+ * model reads; the summary exists so that a note the person never saw is not a note lost.
+ */
+export type GuardLevel = 'warn' | 'medium' | 'high';
+
+export const GUARD_LEVELS: GuardLevel[] = ['warn', 'medium', 'high'];
+
+export const DEFAULT_GUARD_LEVEL: GuardLevel = 'medium';
+
+export function isGuardLevel(value: unknown): value is GuardLevel {
+  return typeof value === 'string' && (GUARD_LEVELS as string[]).includes(value);
+}
+
 export interface Risk {
   id: string;
   /** One line naming what is wrong. */
@@ -42,6 +68,11 @@ export interface Risk {
   quote?: string;
   /** Where it came from: a file path, a URL, a tool name. */
   source?: string;
+  /**
+   * How bad it is if the rule is right. Decides, together with the level, whether the person
+   * is asked; it never changes what the model is told. Absent means not critical.
+   */
+  severity?: Severity;
 }
 
 export interface Verdict {

@@ -11,7 +11,7 @@ import { scanInjection } from '../checks/injection.js';
 import { scanSource } from '../checks/secrets.js';
 import { analyzeMigrations } from '../checks/migrations.js';
 import { checkUploadValidation } from '../checks/uploads.js';
-import type { Finding } from '../core/types.js';
+import type { Finding, Severity } from '../core/types.js';
 import type { Risk } from './verdict.js';
 
 /** Files whose contents are worth scanning for a pending write. */
@@ -120,8 +120,27 @@ function fromFinding(f: Finding, filePath: string): Risk {
     instead: insteadFor(f),
     quote: f.evidence,
     source: f.source ?? filePath,
+    severity: f.severity,
   };
 }
+
+/**
+ * How bad each prompt rule is when it is right. Kept here rather than on the rules because it
+ * only matters to the guard: it decides whether `high` stops the prompt, never what the model
+ * is told. Critical means the request, done as asked, opens the data to anyone — not "this is
+ * a bad idea".
+ */
+const PROMPT_SEVERITY: Record<string, Severity> = {
+  'disable-rls': 'critical',
+  'service-role-client': 'critical',
+  'make-public': 'high',
+  'remove-auth': 'high',
+  'hardcode-secret': 'high',
+  'disable-security': 'high',
+  'commit-env': 'high',
+  'cors-wildcard': 'medium',
+  'upload-type-by-name': 'medium',
+};
 
 /** A prompt the user submitted. */
 export function scanPromptMoment(prompt: string): Risk[] {
@@ -130,6 +149,7 @@ export function scanPromptMoment(prompt: string): Risk[] {
     risk: r.risk,
     why: r.why,
     instead: r.instead,
+    severity: PROMPT_SEVERITY[r.id] ?? 'high',
   }));
 }
 
@@ -196,49 +216,59 @@ export function scanWriteMoment({ filePath, content }: PendingWrite): Risk[] {
  * are the ones that change a security posture or move a secret, and everything else an agent
  * runs all day (`npm`, `git status`, `ls`) must stay silent or the gate becomes noise.
  */
-const COMMAND_RULES: { id: string; pattern: RegExp; risk: string; why: string; instead: string }[] =
-  [
-    {
-      id: 'cmd-disable-rls',
-      pattern: /disable\s+row\s+level\s+security/i,
-      risk: 'This command switches off Row Level Security',
-      why: 'With RLS off, every policy on the table stops applying and the whole table becomes readable — usually writable too — through the public API with the anon key that ships in the browser.',
-      instead:
-        'Leave RLS on and fix the policy instead. A query that returns nothing is the protection working.',
-    },
-    {
-      id: 'cmd-commit-env',
-      // Two fixes over the obvious version. The path is bounded to the same argument list —
-      // `[^\n]` let it run across `&&`, `;` and `#`, so `git add .gitignore && git commit -m
-      // "ignore .env"` matched the remediation itself. And the blanket forms are matched
-      // wherever they appear rather than only at end of line, because `git add . && git
-      // commit -m wip` is how the file actually gets staged.
-      pattern:
-        /\bgit\s+add\b[^\n&;|#]{0,60}(?<![\w.])\.env\b(?!\.(?:example|sample|template|dist))|\bgit\s+add\s+(?:-A\b|--all\b|\.(?=\s|$))/i,
-      risk: 'This command may stage a file that holds credentials',
-      why: 'Once `.env` is committed, every credential in it is in the repository history, and it stays there after the file is deleted. A blanket `git add .` stages whatever is untracked, including a `.env` nobody remembered to ignore.',
-      instead:
-        'Add `.env` to `.gitignore` and stage files by name. If it has already been committed, the credentials in it have to be rotated.',
-    },
-    {
-      id: 'cmd-skip-verification',
-      pattern:
-        /--no-verify\b|--insecure\b|\bNODE_TLS_REJECT_UNAUTHORIZED\s*=\s*0\b|curl[^\n]{0,40}\s-k\b/i,
-      risk: 'This command turns off a verification step',
-      why: 'Skipping hook, certificate or TLS verification removes a check that exists to catch exactly the kind of mistake being made right now, and the flag usually outlives the reason it was added.',
-      instead:
-        'Fix what the check is complaining about. If it has to be skipped once, do it interactively rather than writing the flag into a script.',
-    },
-    {
-      id: 'cmd-secret-to-network',
-      pattern:
-        /\b(?:curl|wget|nc|http)\b[^\n]{0,120}\$\{?(?:[A-Z_]*(?:SECRET|TOKEN|KEY|PASSWORD)[A-Z_]*)\}?/,
-      risk: 'This command sends a credential over the network',
-      why: 'The command interpolates a secret from the environment into a request. Whatever is on the other end receives it in full, and it will be in the shell history either way.',
-      instead:
-        'Do not put secrets in a command line. If a service needs it, let the SDK read it from the environment on the server side.',
-    },
-  ];
+const COMMAND_RULES: {
+  id: string;
+  pattern: RegExp;
+  risk: string;
+  why: string;
+  instead: string;
+  severity: Severity;
+}[] = [
+  {
+    id: 'cmd-disable-rls',
+    severity: 'critical',
+    pattern: /disable\s+row\s+level\s+security/i,
+    risk: 'This command switches off Row Level Security',
+    why: 'With RLS off, every policy on the table stops applying and the whole table becomes readable — usually writable too — through the public API with the anon key that ships in the browser.',
+    instead:
+      'Leave RLS on and fix the policy instead. A query that returns nothing is the protection working.',
+  },
+  {
+    id: 'cmd-commit-env',
+    severity: 'high',
+    // Two fixes over the obvious version. The path is bounded to the same argument list —
+    // `[^\n]` let it run across `&&`, `;` and `#`, so `git add .gitignore && git commit -m
+    // "ignore .env"` matched the remediation itself. And the blanket forms are matched
+    // wherever they appear rather than only at end of line, because `git add . && git
+    // commit -m wip` is how the file actually gets staged.
+    pattern:
+      /\bgit\s+add\b[^\n&;|#]{0,60}(?<![\w.])\.env\b(?!\.(?:example|sample|template|dist))|\bgit\s+add\s+(?:-A\b|--all\b|\.(?=\s|$))/i,
+    risk: 'This command may stage a file that holds credentials',
+    why: 'Once `.env` is committed, every credential in it is in the repository history, and it stays there after the file is deleted. A blanket `git add .` stages whatever is untracked, including a `.env` nobody remembered to ignore.',
+    instead:
+      'Add `.env` to `.gitignore` and stage files by name. If it has already been committed, the credentials in it have to be rotated.',
+  },
+  {
+    id: 'cmd-skip-verification',
+    severity: 'medium',
+    pattern:
+      /--no-verify\b|--insecure\b|\bNODE_TLS_REJECT_UNAUTHORIZED\s*=\s*0\b|curl[^\n]{0,40}\s-k\b/i,
+    risk: 'This command turns off a verification step',
+    why: 'Skipping hook, certificate or TLS verification removes a check that exists to catch exactly the kind of mistake being made right now, and the flag usually outlives the reason it was added.',
+    instead:
+      'Fix what the check is complaining about. If it has to be skipped once, do it interactively rather than writing the flag into a script.',
+  },
+  {
+    id: 'cmd-secret-to-network',
+    severity: 'high',
+    pattern:
+      /\b(?:curl|wget|nc|http)\b[^\n]{0,120}\$\{?(?:[A-Z_]*(?:SECRET|TOKEN|KEY|PASSWORD)[A-Z_]*)\}?/,
+    risk: 'This command sends a credential over the network',
+    why: 'The command interpolates a secret from the environment into a request. Whatever is on the other end receives it in full, and it will be in the shell history either way.',
+    instead:
+      'Do not put secrets in a command line. If a service needs it, let the SDK read it from the environment on the server side.',
+  },
+];
 
 export function scanCommandMoment(command: string): Risk[] {
   if (!command) return [];
@@ -253,6 +283,7 @@ export function scanCommandMoment(command: string): Risk[] {
       instead: rule.instead,
       quote: m[0].slice(0, 200),
       source: 'shell command',
+      severity: rule.severity,
     });
   }
   return risks;

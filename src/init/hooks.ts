@@ -93,6 +93,16 @@ function claudeShaped(host: Host, ctx: HookContext, moments: Moment[]): Record<s
       (hooks[event] ??= []).push(group);
     }
   }
+  // The end-of-turn summary rides along with any guarded moment: it is the only place the
+  // person reads the notes that went to the model while they were away. No matcher — the
+  // event is not tool-scoped.
+  if (host.summary && moments.length > 0) {
+    (hooks[host.summary] ??= []).push({
+      hooks: [
+        { type: 'command', command: ctx.guardCommand, timeout: ctx.guardTimeout, vibeward: MARK },
+      ],
+    });
+  }
   return hooks;
 }
 

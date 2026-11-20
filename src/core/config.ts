@@ -145,8 +145,23 @@ export function parseConfig(raw: string): { config: VibewardConfig; warnings: st
     }
   }
 
+  // How often the guard may stop the person. It changes when they are asked, never what is
+  // found or what the model is told, so it sits beside `suppress` without sharing its rules.
+  const guard = asRecord(root.guard);
+  if (root.guard !== undefined && !guard) warnings.push('"guard" must be an object — ignored');
+  if (guard) {
+    const level = guard.level;
+    if (level === 'warn' || level === 'medium' || level === 'high') config.guard = { level };
+    else if (level !== undefined) {
+      warnings.push(`guard.level "${String(level)}" must be "warn", "medium" or "high" — ignored`);
+    }
+    for (const key of Object.keys(guard)) {
+      if (key !== 'level') warnings.push(`unknown key "guard.${key}" — ignored`);
+    }
+  }
+
   for (const key of Object.keys(root)) {
-    if (!['schemaVersion', 'intent', 'suppress'].includes(key)) {
+    if (!['schemaVersion', 'intent', 'suppress', 'guard'].includes(key)) {
       warnings.push(`unknown key "${key}" — ignored`);
     }
   }
