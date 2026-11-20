@@ -1,4 +1,5 @@
 import { pendingMarkdown, type PendingItem } from '../core/pending.js';
+import type { TrustCenter } from '../checks/trust.js';
 import { isWeb } from '../core/types.js';
 import type { Finding, Severity, SuppressedFinding } from '../core/types.js';
 import { coverage, coverageText } from '../core/i18n.js';
@@ -38,6 +39,36 @@ export interface ReportInput {
   configPath?: string | null;
   /** Fixed tasks for a person or an agent, rendered before the next steps. */
   pending?: PendingItem[];
+  /** Lovable's published checks, set beside this scan's results. */
+  trustCenter?: TrustCenterView | null;
+}
+
+/** A Trust center as the report shows it: what it lists, and what this scan makes of it. */
+export interface TrustCenterView extends TrustCenter {
+  lines: CoverageLine[];
+}
+
+const TRUST_TEXT = {
+  en: {
+    title: 'Lovable Trust center',
+    intro: (n: number, url: string) =>
+      `This app publishes a [trust page](${url}) with ${n} check(s) Lovable verified on the live deployment. Lovable lists only what passed, and its checks are about how the app is served. Beside this scan:`,
+    listed: 'Listed as passing',
+  },
+  es: {
+    title: 'Trust center de Lovable',
+    intro: (n: number, url: string) =>
+      `Esta app publica una [página de confianza](${url}) con ${n} control(es) que Lovable verificó sobre la versión publicada. Lovable solo lista lo que pasó, y sus controles tratan de cómo se sirve la app. Junto a este escaneo:`,
+    listed: 'Publicados como cumplidos',
+  },
+};
+
+function trustMarkdown(tc: TrustCenterView, lang: Lang): string {
+  const t = TRUST_TEXT[lang];
+  let md = `## ${t.title}\n\n${t.intro(tc.controls.length, tc.pageUrl)}\n\n`;
+  for (const line of tc.lines) md += `- ${coverageText(line, lang)}\n`;
+  md += `\n${t.listed}: ${tc.controls.map((c) => `\`${c}\``).join(', ')}\n\n`;
+  return md;
 }
 
 export interface ReportOutput {
@@ -242,6 +273,7 @@ export function buildReport({
   notEvaluated = new Map(),
   configPath,
   pending = [],
+  trustCenter = null,
 }: ReportInput): ReportOutput {
   const t = REPORT[lang];
   const security = findings.filter((f) => !isWeb(f));
@@ -344,6 +376,8 @@ export function buildReport({
       configPath,
     );
   }
+
+  if (trustCenter) md += `---\n\n${trustMarkdown(trustCenter, lang)}`;
 
   md += `---\n\n`;
   md += `## ${t.coverageTitle}\n\n`;

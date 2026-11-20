@@ -52,6 +52,8 @@ import {
   pendingMarkdown,
 } from '../src/core/pending.js';
 import { ciSummary } from '../src/reporters/ci.js';
+import { checkCookies, checkMixedContent } from '../src/checks/browser.js';
+import { contrastTrustCenter, parseTrustCenter } from '../src/checks/trust.js';
 import {
   normalizePageUrl,
   discoverInternalLinks,
@@ -2744,6 +2746,170 @@ console.log('\n41. Pending — what vibeward hands on, the same way every run');
     'a folder scan collects the builder and the sinks',
   );
   rmSync(dir, { recursive: true, force: true });
+}
+
+console.log('\n42. Cookies, mixed content and the Lovable Trust center');
+{
+  const cookies = (list: string[], url = 'https://app.test/') => {
+    const h = new Headers();
+    for (const c of list) h.append('set-cookie', c);
+    return checkCookies(h, url);
+  };
+  const ids = (fs: Finding[]) =>
+    fs
+      .map((f) => f.id)
+      .sort()
+      .join(',');
+  assert(
+    ids(cookies(['session_id=a; Path=/'])) ===
+      'cookie_session_not_secure,cookie_session_script_readable',
+    'a session cookie with neither flag: both findings',
+  );
+  assert(
+    cookies(['session_id=a; Secure; HttpOnly; SameSite=Lax']).length === 0,
+    'a session cookie with both: clean',
+  );
+  assert(
+    cookies(['_ga=GA1.2.3; Path=/', 'theme=dark']).length === 0,
+    'analytics and preference cookies are not judged',
+  );
+  assert(
+    ids(cookies(['sb-abcd-auth-token=x; Path=/'])) === 'cookie_session_not_secure',
+    "Supabase's SSR cookie is readable by design: only Secure is asked of it",
+  );
+  assert(
+    ids(cookies(['connect.sid=s; HttpOnly'], 'http://app.test/')) === '',
+    'on a plain-http page Secure cannot be asked for (the transport finding covers it)',
+  );
+  assert(
+    cookies(['session=a; HttpOnly'])[0]?.label.includes('`session`') === true,
+    'the label names the cookie',
+  );
+
+  const mixed = (html: string, url = 'https://app.test/') => checkMixedContent(html, url);
+  assert(
+    mixed('<script src="http://cdn.test/a.js"></script>')[0]?.id === 'mixed_content_active',
+    'a script over http',
+  );
+  assert(
+    mixed('<link rel="stylesheet" href="http://cdn.test/a.css">').length === 1,
+    'a stylesheet over http',
+  );
+  assert(
+    mixed('<link rel="canonical" href="http://app.test/">').length === 0,
+    'not mixed: a canonical link loads nothing',
+  );
+  assert(
+    mixed('<img src="http://cdn.test/a.png">').length === 0,
+    'not reported: an image runs no code',
+  );
+  assert(
+    mixed('<script data-src="http://x.test/a.js" src="/a.js"></script>').length === 0,
+    'not mixed: data-src is not src',
+  );
+  assert(
+    mixed('<script src="http://localhost:5173/@vite/client"></script>').length === 0,
+    'not mixed: a loopback leftover fails on its own',
+  );
+  assert(
+    mixed('<!-- <script src="http://cdn.test/a.js"></script> -->').length === 0,
+    'not mixed: a comment',
+  );
+  assert(
+    mixed('<script src="http://cdn.test/a.js"></script>', 'http://app.test/').length === 0,
+    'an http:// page is not mixed content, it is the transport finding',
+  );
+  const login = mixed(
+    '<form action="http://app.test/login"><input type="password" name="p"></form>',
+  );
+  assert(
+    login[0]?.id === 'insecure_form_action' && login[0].severity === 'high',
+    'a login form posting over http is high',
+  );
+  assert(
+    mixed('<form action="http://app.test/s"><input name="q"></form>')[0]?.severity === 'medium',
+    'any other form posting over http is medium',
+  );
+  assert(
+    mixed('<form action="/login"><input type="password"></form>').length === 0,
+    'a relative action is fine',
+  );
+
+  // The Trust center, in the shape Lovable served in November 2026.
+  const doc = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      version: 2,
+      verification: { platform_generated: true, signed: false },
+      claims: {
+        controls: [
+          'https_redirect',
+          'hsts',
+          'content_type_options',
+          'mixed_content',
+          'dependency_vulns',
+        ].map((id) => ({ id, assurance_class: 'probed', subject_type: 'deployment' })),
+        checked_at: '2026-11-20T17:16:38Z',
+        expires_at: '2026-11-21T17:16:38Z',
+      },
+      ...extra,
+    });
+  const at = Date.parse('2026-11-20T20:00:00Z');
+  const tc = parseTrustCenter(doc(), 'https://app.lovable.app', at);
+  assert(
+    tc?.controls.length === 5 && tc.pageUrl === 'https://app.lovable.app/.well-known/trust.html',
+    'the published checks are read, and the page for people is linked',
+  );
+  assert(tc?.expired === false, 'not expired before expires_at');
+  assert(
+    parseTrustCenter(doc(), 'https://a.test', Date.parse('2026-11-22T00:00:00Z'))?.expired === true,
+    'expired after it',
+  );
+  assert(
+    parseTrustCenter(doc({ verification: { platform_generated: false } }), 'https://a.test') ===
+      null,
+    "a document the app wrote itself is not Lovable's",
+  );
+  assert(
+    parseTrustCenter('<html>not json</html>', 'https://a.test') === null,
+    'an HTML 404 page is not one',
+  );
+  assert(
+    parseTrustCenter('{"version":2}', 'https://a.test') === null,
+    'neither is JSON without controls',
+  );
+
+  const quiet = contrastTrustCenter(tc!, [], null);
+  assert(
+    quiet.length === 1 && quiet[0]!.en.includes('not who can read its data'),
+    'no contradiction: said, along with what the checks do not cover',
+  );
+  const hsts: Finding = {
+    id: 'missing_header_strict-transport-security',
+    label: 'x',
+    severity: 'low',
+    why: '',
+  };
+  assert(
+    contrastTrustCenter(tc!, [hsts], null).some((l) => l.en.includes('HSTS as passing')),
+    'a published check this scan contradicts is named',
+  );
+  const rls = { exposedCount: 2 } as unknown as Parameters<typeof contrastTrustCenter>[2];
+  assert(
+    contrastTrustCenter(tc!, [], rls).some((l) => l.en.includes('no claim about the database')),
+    'readable tables with no database claim: an omitted check is no claim',
+  );
+  const withDb = { ...tc!, controls: [...tc!.controls, 'rls_enabled'] };
+  assert(
+    contrastTrustCenter(withDb, [], rls).some((l) =>
+      l.en.includes('always true passes that check'),
+    ),
+    'readable tables despite a database claim: RLS on is not nobody reading',
+  );
+  const stale = { ...tc!, expired: true };
+  assert(
+    contrastTrustCenter(stale, [], null)[0]!.en.includes('stale'),
+    'an expired document is called stale, not failed',
+  );
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

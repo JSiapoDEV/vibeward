@@ -6,6 +6,8 @@ import { scanText, scanCrawledPages, extractSupabaseConfig } from '../checks/sec
 import { checkSourceMap } from '../checks/sourcemaps.js';
 import { checkHeaders } from '../checks/headers.js';
 import { checkPlainHttp } from '../checks/transport.js';
+import { checkCookies, checkMixedContent } from '../checks/browser.js';
+import { contrastTrustCenter, parseTrustCenter, type TrustCenter } from '../checks/trust.js';
 import { checkWeb, parsePage, fingerprintStack, webChecksNotEvaluated } from '../checks/web.js';
 import type { StackFingerprint } from '../checks/web.js';
 import { readConsoleErrors } from '../checks/console.js';
@@ -101,6 +103,18 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
   );
   findings.push(...checkHeaders(mainPage.headers));
 
+  const pageUrl = mainPage.finalUrl ?? target;
+  findings.push(...checkCookies(mainPage.headers, pageUrl));
+  cov.checked(
+    AREA.cookies,
+    'Session cookies on the first, signed-out response (Secure, HttpOnly) — cookies set after login are not seen by a scan that never logs in',
+    'Cookies de sesión en la primera respuesta, sin iniciar sesión (Secure, HttpOnly) — las que se crean tras el login no las ve un escaneo que nunca inicia sesión',
+  );
+  // Mixed content is judged per page and reported once per kind: a script tag in a shared
+  // layout is one problem on every page, not one problem per page.
+  const mixed = new Map<string, Finding>();
+  for (const f of checkMixedContent(mainPage.body, pageUrl)) mixed.set(f.id, f);
+
   // One GET to the plain-HTTP twin of the target — the same request a visitor makes by
   // typing the domain — so it runs in passive mode too. It reads nothing private.
   write(`${C.gray}▸ Checking the plain-HTTP address…${C.reset}`);
@@ -116,6 +130,20 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     'Redirección HTTP→HTTPS (si el sitio responde en http:// plano)',
   );
   if (plainHttp) findings.push(plainHttp);
+
+  // Lovable's Trust center, when the app publishes one. A public path on the target, read
+  // once, set beside this scan's own results in the report — never turned into a finding.
+  let trustCenter: TrustCenter | null = null;
+  if (URL.canParse(pageUrl)) {
+    const origin = new URL(pageUrl).origin;
+    const trust = await fetchText(`${origin}/.well-known/trust.json`);
+    if (trust.ok && trust.body) trustCenter = parseTrustCenter(trust.body, origin);
+    if (trustCenter) {
+      log(
+        `${C.gray}▸ Lovable Trust center: ${trustCenter.controls.length} published check(s)${C.reset}`,
+      );
+    }
+  }
 
   const baseUrl = mainPage.finalUrl ?? target;
   const scriptUrls = discoverScripts(mainPage.body, baseUrl);
@@ -216,6 +244,10 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     // a site whose marketing lives on `/` and whose application lives on `app.html`, the code
     // went unscanned. See scanCrawledPages for the dedup semantics.
     findings.push(...scanCrawledPages(crawl.pages, [target, baseUrl], findings));
+    for (const page of crawl.pages) {
+      for (const f of checkMixedContent(page.html, page.url))
+        if (!mixed.has(f.id)) mixed.set(f.id, f);
+    }
     // A secondary page can carry the backend config the home page does not — pick it up so the
     // (authorized) full scan has a target to probe.
     for (const page of crawl.pages) {
@@ -407,11 +439,25 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     );
   }
 
+  findings.push(...mixed.values());
+  cov.checked(
+    AREA.mixedContent,
+    args.noWeb
+      ? 'Scripts, styles, frames and forms loaded or submitted over plain HTTP — on the home page only (--no-web)'
+      : 'Scripts, styles, frames and forms loaded or submitted over plain HTTP, on every crawled page',
+    args.noWeb
+      ? 'Scripts, estilos, frames y formularios cargados o enviados por HTTP plano — solo en la portada (--no-web)'
+      : 'Scripts, estilos, frames y formularios cargados o enviados por HTTP plano, en cada página rastreada',
+  );
+
   const scanned = cov.entries();
   const pending = buildPending({
     scanned,
     // From the address itself: the website pass that builds `fingerprint` may not have run.
-    builder: builderFromHost(URL.canParse(target) ? new URL(target).hostname : ''),
+    // A Trust center is Lovable's alone, so it also names the builder on a custom domain.
+    builder:
+      builderFromHost(URL.canParse(target) ? new URL(target).hostname : '') ??
+      (trustCenter ? 'lovable' : null),
   });
 
   finish(
@@ -422,6 +468,9 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     { ...args, active: doActive },
     {
       pending,
+      trustCenter: trustCenter
+        ? { ...trustCenter, lines: contrastTrustCenter(trustCenter, findings, rls) }
+        : null,
       fingerprint,
       consoleChecked,
       suppressed,

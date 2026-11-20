@@ -11,6 +11,7 @@ import type { CoverageLine, Lang } from '../core/i18n.js';
 import { isComplete } from '../core/coverage.js';
 import { builderPrompt, type PendingItem } from '../core/pending.js';
 import { ciSummary } from './ci.js';
+import type { TrustCenterView } from './markdown.js';
 import type { CoverageEntry } from '../core/coverage.js';
 import { C, log, todayISO } from '../core/terminal.js';
 import { VERSION, stalenessNotice } from '../core/version.js';
@@ -43,6 +44,8 @@ export interface FinishExtras {
   configPath?: string | null;
   /** What is left for a person or an agent to judge. */
   pending?: PendingItem[];
+  /** Lovable's published checks, with where this scan agrees and where it does not. */
+  trustCenter?: TrustCenterView | null;
 }
 
 /**
@@ -150,6 +153,7 @@ export function finish(
     notEvaluated: extras.notEvaluated,
     configPath: extras.configPath,
     pending: extras.pending,
+    trustCenter: extras.trustCenter,
   });
   const pending = extras.pending ?? [];
 
@@ -218,6 +222,17 @@ export function finish(
     })),
     /** The same, as one message to paste into a builder's chat. Null when nothing is pending. */
     builderPrompt: builderPrompt(localized, pending, lang),
+    /** Lovable's published checks and this scan's reading of them. Null when none was served. */
+    trustCenter: extras.trustCenter
+      ? {
+          pageUrl: extras.trustCenter.pageUrl,
+          controls: extras.trustCenter.controls,
+          checkedAt: extras.trustCenter.checkedAt,
+          expiresAt: extras.trustCenter.expiresAt,
+          expired: extras.trustCenter.expired,
+          contrast: extras.trustCenter.lines.map((l) => coverageText(l, lang)),
+        }
+      : null,
   };
 
   if (opts.summary) {

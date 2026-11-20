@@ -49,6 +49,10 @@ export const AREA = {
   httpHeaders: 'http_headers',
   /** Whether the plain-http:// twin of the target answers instead of redirecting. */
   transport: 'transport_https',
+  /** Session cookies on the signed-out response: Secure and HttpOnly. */
+  cookies: 'session_cookies',
+  /** Scripts, styles, frames and forms an HTTPS page loads or submits over plain HTTP. */
+  mixedContent: 'mixed_content',
   /** Secrets and credentials in the JavaScript bundles served to the browser. */
   bundleSecrets: 'bundle_secrets',
   /** Source maps left reachable next to those bundles. */
