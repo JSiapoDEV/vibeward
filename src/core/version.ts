@@ -3,7 +3,10 @@ export const VERSION = '0.7.0';
 
 /**
  * The day this version was released, ISO. Bumped with VERSION, on the same line of the
- * release checklist — a test fails if it is ever in the future.
+ * release checklist — a test fails if it is ever in the future, or if it disagrees with the
+ * release date METHODOLOGY.md gives for this version, and `npm publish` refuses to ship it
+ * once it is more than a week old (`scripts/check-release-date.mjs`). v0.7.0 shipped with
+ * v0.6.2's date, and every fresh install told its user it was three months out of date.
  *
  * This exists so a copy can tell the user it is old without asking anybody. The hook could
  * have run `npx vibeward@latest` and always been current, but that trades the guard's
@@ -12,7 +15,7 @@ export const VERSION = '0.7.0';
  * pinned copy that knows its own age is the better half of that trade — and it needs no
  * network, so "nothing about you is ever uploaded" stays literally true.
  */
-export const RELEASED = '2026-08-18';
+export const RELEASED = '2026-11-13';
 
 /** Past this, a copy is old enough that the lexicon has likely moved on without it. */
 const STALE_AFTER_DAYS = 60;

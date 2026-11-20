@@ -1439,6 +1439,27 @@ console.log('\n28. Staleness notice — a pinned copy that knows its own age');
   // The constant is hand-maintained next to VERSION. These catch the two ways that rots.
   assert(ageInDays() !== null, 'RELEASED in the shipped build actually parses');
   assert((ageInDays() ?? -1) >= 0, 'RELEASED is not in the future');
+
+  // The third way it rots, and the one that shipped: v0.7.0 went out with v0.6.2's date, and
+  // every fresh install told its user it was three months old. The release checklist reliably
+  // moves METHODOLOGY.md's "tagged commit for vX (released D)" line, so RELEASED is held to it.
+  // scripts/check-release-date.mjs catches a release that forgets both, at `npm publish`.
+  {
+    const methodology = readFileSync(new URL('../METHODOLOGY.md', import.meta.url), 'utf8');
+    const stated =
+      /tagged commit for \*\*v([^*]+)\*\*\s+\(`src\/core\/version\.ts:\d+`, released `([^`]+)`\)/.exec(
+        methodology,
+      );
+    assert(stated !== null, 'METHODOLOGY.md states the version and date its figures come from');
+    assert(
+      stated?.[1] === VERSION,
+      `METHODOLOGY.md describes v${stated?.[1]}, the build is v${VERSION}`,
+    );
+    assert(
+      stated?.[2] === RELEASED,
+      `METHODOLOGY.md says released ${stated?.[2]}, RELEASED is ${RELEASED}`,
+    );
+  }
 }
 
 console.log('\n29. Transport — the plain-HTTP twin of an HTTPS target');

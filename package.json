@@ -17,7 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
-    "prepublishOnly": "npm run build:plugin"
+    "prepublishOnly": "node scripts/check-release-date.mjs && npm run build:plugin"
   },
   "keywords": [
     "security",
