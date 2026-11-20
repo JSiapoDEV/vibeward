@@ -32,6 +32,8 @@ export interface PendingItem {
   why: CoverageLine;
   /** The files it is about, capped; empty for platform and unchecked items. */
   files: string[];
+  /** How many files there were before the cap, when it cut some. */
+  total?: number;
 }
 
 /** The AI app builders whose own security scan a pending item can point at. */
@@ -53,10 +55,18 @@ export interface ReviewSignals {
   serverEntry: Set<string>;
   /** Server code that fetches a URL built from something other than a literal. */
   dynamicFetch: Set<string>;
+  /** The server entry points that take an id from the request — where ownership matters. */
+  serverWithIds: Set<string>;
 }
 
 export function emptySignals(): ReviewSignals {
-  return { builder: null, htmlSinks: new Set(), serverEntry: new Set(), dynamicFetch: new Set() };
+  return {
+    builder: null,
+    htmlSinks: new Set(),
+    serverEntry: new Set(),
+    dynamicFetch: new Set(),
+    serverWithIds: new Set(),
+  };
 }
 
 /** Tests, fixtures and stories, where a sink or a fetch is the point of the file. */
@@ -78,6 +88,27 @@ const SERVER_PATH =
 /** A file that registers routes itself: Express, Fastify, Hono, Koa routers and the like. */
 const ROUTE_REGISTRATION =
   /\b(?:app|router|server|fastify|api|routes?|hono|r)\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]\/|\.route\s*\(\s*\{[^}]*\burl\s*:|\bcreateRoute\s*\(/;
+
+/** Tools an MCP server exposes: each one is an entry point that takes its arguments from a model. */
+const MCP_TOOL =
+  /\.(?:tool|registerTool)\s*\(\s*['"`][\w.-]+['"`]|(^|[\\/])(?:mcp|llm)[\\/](?:.+[\\/])?tools?[\\/]/;
+
+/** A route that takes an identifier from the request: `/:id`, `[id]`, `req.params`. */
+const TAKES_ID =
+  /['"`][^'"`\n]*\/:\w+|\breq(?:uest)?\.params\b|\bc\.req\.param\s*\(|\bparams\.\w*[iI]d\b/;
+
+/** Code that escapes what it puts into HTML: the file has thought about it. */
+const HTML_ESCAPE =
+  /\bescapeHtml\s*\(|\bescapeHTML\s*\(|DOMPurify|sanitize-html|\bsanitizeHtml\s*\(|\bhe\.(?:encode|escape)\s*\(|from\s+['"]escape-html['"]/;
+
+/**
+ * Code with the contents of every template literal removed. A server file that builds an HTML
+ * page often carries a `<script>` with a `fetch(` in it — code that runs in the browser, not on
+ * the server — and reading it as server code produced an SSRF lead about a fixed URL.
+ */
+function outsideTemplates(content: string): string {
+  return content.replace(/`(?:\\[\s\S]|[^`\\])*`/g, '``');
+}
 
 /** A server action module, wherever it lives. */
 const USE_SERVER = /^\s*['"]use server['"]/m;
@@ -110,6 +141,8 @@ function onlyFixedHtml(content: string): boolean {
   const fixed = (v: string): boolean => {
     if (/^(['"])(?:(?!\1)[^\\]|\\.)*\1$/.test(v)) return true;
     if (/^`[^`]*`$/.test(v)) return !v.includes('${');
+    // A builder called with nothing (`buildThemeScript()`) has no input a visitor could reach.
+    if (/^[A-Za-z_$][\w$.]*\(\s*\)$/.test(v)) return true;
     if (/^[A-Za-z_$][\w$]*$/.test(v)) {
       const def = new RegExp(
         `\\b(?:const|let|var)\\s+${v.replace(/\$/g, '\\$')}\\s*=\\s*(\`[^\`]*\`|'[^'\\n]*'|"[^"\\n]*")`,
@@ -142,13 +175,20 @@ export function collectSignals(
   content: string,
 ): ReviewSignals {
   if (NOT_APP_CODE.test(relPath)) return signals;
-  if (HTML_SINK.test(content) && !onlyFixedHtml(content)) signals.htmlSinks.add(relPath);
+  if (HTML_SINK.test(content) && !onlyFixedHtml(content) && !HTML_ESCAPE.test(content)) {
+    signals.htmlSinks.add(relPath);
+  }
   const server =
-    SERVER_PATH.test(relPath) || USE_SERVER.test(content) || ROUTE_REGISTRATION.test(content);
+    SERVER_PATH.test(relPath) ||
+    USE_SERVER.test(content) ||
+    ROUTE_REGISTRATION.test(content) ||
+    MCP_TOOL.test(relPath) ||
+    MCP_TOOL.test(content);
   if (server) {
     signals.serverEntry.add(relPath);
-    if (REQUEST_INPUT.test(content) && DYNAMIC_FETCH.test(content))
-      signals.dynamicFetch.add(relPath);
+    if (TAKES_ID.test(content) || /\[[^\]]*id\]/i.test(relPath)) signals.serverWithIds.add(relPath);
+    const code = outsideTemplates(content);
+    if (REQUEST_INPUT.test(code) && DYNAMIC_FETCH.test(code)) signals.dynamicFetch.add(relPath);
   }
   return signals;
 }
@@ -209,8 +249,14 @@ const PLATFORM: Record<Builder, { task: CoverageLine; why: CoverageLine }> = {
   },
 };
 
-function capped(files: Set<string> | string[]): string[] {
-  return [...files].sort().slice(0, MAX_FILES);
+/** The files to name and, when some were cut, how many there were — first ones first. */
+function listed(
+  all: Set<string>,
+  first: Set<string> = new Set(),
+): { files: string[]; total?: number } {
+  const ordered = [...[...first].sort(), ...[...all].filter((f) => !first.has(f)).sort()];
+  const files = ordered.slice(0, MAX_FILES);
+  return ordered.length > files.length ? { files, total: ordered.length } : { files };
 }
 
 /** Review items from what a folder scan collected. */
@@ -222,13 +268,13 @@ function reviewItems(signals: ReviewSignals): PendingItem[] {
       kind: 'review',
       task: coverage(
         'Check that nothing a user typed reaches these HTML sinks without being sanitised (DOMPurify or equivalent).',
-        'Revisa que nada escrito por un usuario llegue a estos puntos que insertan HTML sin sanitizar (DOMPurify o equivalente).',
+        'Revisa que nada escrito por un usuario llegue sin sanitizar (DOMPurify o equivalente) a estos lugares donde se inserta HTML.',
       ),
       why: coverage(
         'Text inserted as HTML runs as code in the next visitor’s browser (XSS): it can read their session and act as them.',
         'Un texto insertado como HTML se ejecuta como código en el navegador del siguiente visitante (XSS): puede leer su sesión y actuar en su nombre.',
       ),
-      files: capped(signals.htmlSinks),
+      ...listed(signals.htmlSinks),
     });
   }
   if (signals.serverEntry.size > 0) {
@@ -243,7 +289,8 @@ function reviewItems(signals: ReviewSignals): PendingItem[] {
         'A signed-in user who changes an id in the request gets someone else’s data (IDOR). It is the most common flaw rules cannot see, because the check is about meaning, not syntax.',
         'Un usuario con sesión que cambia un id en la petición obtiene los datos de otro (IDOR). Es el fallo más común que una regla no ve, porque depende del significado, no de la sintaxis.',
       ),
-      files: capped(signals.serverEntry),
+      // The ones that take an id first: that is where a changed id reaches someone else's row.
+      ...listed(signals.serverEntry, signals.serverWithIds),
     });
   }
   if (signals.dynamicFetch.size > 0) {
@@ -258,7 +305,7 @@ function reviewItems(signals: ReviewSignals): PendingItem[] {
         'A server that fetches whatever URL it is given can be pointed at internal addresses and cloud metadata (SSRF).',
         'Un servidor que pide cualquier URL que le pasen puede apuntarse a direcciones internas y a los metadatos de la nube (SSRF).',
       ),
-      files: capped(signals.dynamicFetch),
+      ...listed(signals.dynamicFetch),
     });
   }
   return items;
@@ -313,7 +360,7 @@ export function buildPending(input: {
         'A function runs with its own checks, not the table policies around it; one marked SECURITY DEFINER skips RLS entirely.',
         'Una función corre con sus propias comprobaciones, no con las políticas de las tablas; una marcada SECURITY DEFINER se salta la RLS por completo.',
       ),
-      files: capped(input.rpcs.map((n) => `rpc/${n}`)),
+      ...listed(new Set(input.rpcs.map((n) => `rpc/${n}`))),
     });
   }
   const builder = input.builder ?? input.signals?.builder ?? null;
@@ -344,10 +391,10 @@ const TEXT = {
   es: {
     title: 'Pendientes — para ti o tu agente',
     blurb:
-      'vibeward no los juzga: hace falta alguien que lea el código. Cada uno es una tarea fija, igual en cada corrida. Pásaselos a tu agente, o pega el prompt de abajo en tu constructor.',
+      'vibeward no los juzga: hace falta alguien que lea el código. Cada uno es una tarea fija, igual en cada corrida. Pásaselos a tu agente, o pega el prompt de abajo en tu herramienta de IA.',
     files: 'Archivos',
-    kind: { review: 'Revisar', platform: 'Tu constructor', unchecked: 'No revisado' },
-    promptTitle: 'Prompt para tu constructor (Lovable, Bolt, v0, Cursor…)',
+    kind: { review: 'Revisar', platform: 'Tu herramienta de IA', unchecked: 'No revisado' },
+    promptTitle: 'Prompt para tu herramienta de IA (Lovable, Bolt, v0, Cursor…)',
     promptHead:
       'Un escáner de seguridad (vibeward) revisó mi proyecto. No cambies nada todavía. Primero explica, en palabras simples, qué encuentras en cada punto de abajo y qué cambiarías; yo confirmo antes de que edites.',
     promptFix: 'Problemas que encontró, para explicar y proponer cómo corregirlos:',
@@ -386,11 +433,19 @@ export function builderPrompt(
   if (reviews.length > 0) {
     lines.push(t.promptReview);
     reviews.forEach((r, i) => {
-      const files = r.files.length > 0 ? ` ${t.files}: ${r.files.join(', ')}` : '';
+      const files =
+        r.files.length > 0 ? ` ${t.files}: ${r.files.join(', ')}${moreText(r, lang)}` : '';
       lines.push(`${i + 1}. ${coverageText(r.task, lang)}${files}`);
     });
   }
   return lines.join('\n').trim();
+}
+
+/** ", and 18 more" when the list was cut. */
+export function moreText(item: PendingItem, lang: Lang): string {
+  if (!item.total || item.total <= item.files.length) return '';
+  const n = item.total - item.files.length;
+  return lang === 'es' ? ` y ${n} más` : ` and ${n} more`;
 }
 
 /** The report section. Empty string when there is nothing pending. */
@@ -402,7 +457,7 @@ export function pendingMarkdown(findings: Finding[], items: PendingItem[], lang:
     md += `- [ ] **${t.kind[item.kind]}** — ${coverageText(item.task, lang)}\n`;
     md += `  ${coverageText(item.why, lang)}\n`;
     if (item.files.length > 0) {
-      md += `  ${t.files}: ${item.files.map((f) => `\`${f}\``).join(', ')}\n`;
+      md += `  ${t.files}: ${item.files.map((f) => `\`${f}\``).join(', ')}${moreText(item, lang)}\n`;
     }
   }
   const prompt = builderPrompt(findings, items, lang);

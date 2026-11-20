@@ -40,7 +40,7 @@ export function sourceMapFinding(mapUrl: string, mapBody: string): Finding | nul
       exploit: `Cualquiera abre ${mapUrl} y reconstruye el fuente sin minificar — nombres de componentes, comentarios, configuración en línea y cualquier valor hardcodeado que el bundler dejara dentro.`,
       impact:
         'El código fuente original es legible por cualquiera, lo que convierte una caja negra en un libro abierto: cualquier otra debilidad pasa a ser mucho más fácil de encontrar, y los secretos que quedaran en el código se entregan directamente.',
-      why: 'Las builds de producción no deberían publicar source maps. Desactiva su emisión en producción, o elimina los ficheros `.map` de la salida desplegada.',
+      why: 'Las builds de producción no deberían publicar source maps. Desactiva su emisión en producción, o elimina los archivos `.map` de la salida desplegada.',
     },
     label: 'Source map exposed — original source code is downloadable',
     severity: 'medium',

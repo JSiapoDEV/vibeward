@@ -100,7 +100,7 @@ function insteadFor(f: Finding): string {
   if (f.id.startsWith('upload_type_by_name_')) {
     return 'Read the first bytes of the uploaded file on the server and match them against an allowlist of types (`file-type` in Node, `python-magic` in Python, `finfo` in PHP, `http.DetectContentType` in Go). Keep the extension, `accept` and the declared MIME type as hints only, and store the file under a generated name with the extension of the detected type.';
   }
-  if (f.id === 'firebase_web_api_key') {
+  if (/^firebase_(web|android|ios)_api_key$/.test(f.id)) {
     return 'Leave this key in the client — the Firebase SDK needs it there, and moving it server-side breaks sign-in without protecting anything. What protects it is a restriction: in Google Cloud Console → Credentials, limit it to the app domains and to the Firebase APIs the web app uses.';
   }
   if (f.id.startsWith('grant_') || f.id.includes('anon')) {

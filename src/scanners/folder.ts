@@ -59,6 +59,9 @@ const SCAN_EXT = new Set([
   '.yml',
   '.toml',
   '.sh',
+  // GoogleService-Info.plist carries the iOS app's Firebase key; it was the one key in a real
+  // repository that no scan ever read.
+  '.plist',
 ]);
 const SCAN_FILE = new Set(['Dockerfile', 'dockerfile', 'Procfile']);
 const MAX_FILE = 2_000_000; // skip files larger than 2 MB
@@ -271,17 +274,17 @@ export function folderCoverage(input: {
   supabaseContext: boolean;
   supabaseExport: boolean;
 }): CoverageEntry[] {
-  const { dir, filesScanned, migrations, supabaseContext, supabaseExport } = input;
+  const { filesScanned, migrations, supabaseContext, supabaseExport } = input;
   const cov = ledger();
   cov.checked(
     AREA.sourceSecrets,
-    `Secrets and committed environment files across ${filesScanned} source file(s) in ${dir}`,
-    `Secretos y ficheros de entorno commiteados en ${filesScanned} fichero(s) fuente de ${dir}`,
+    `Secrets and committed environment files, across ${filesScanned} project files`,
+    `Secretos y archivos de entorno subidos al repositorio, en ${filesScanned} archivos del proyecto`,
   );
   cov.checked(
     AREA.backendAuthz,
     'Next.js security headers, server-action authorization and formula injection in the same files',
-    'Cabeceras de seguridad de Next.js, autorización en server actions e inyección de fórmulas en esos mismos ficheros',
+    'Cabeceras de seguridad de Next.js, autorización en server actions e inyección de fórmulas en esos mismos archivos',
   );
   cov.checked(
     AREA.uploadValidation,
@@ -289,11 +292,19 @@ export function folderCoverage(input: {
     'Manejadores de subida de archivos cuya comprobación de tipo solo lee la extensión, el atributo `accept` o el tipo MIME declarado, nunca el contenido',
   );
 
-  if (migrations > 0) {
+  if (migrations > 0 && supabaseContext) {
     cov.checked(
       AREA.sqlMigrations,
       `Supabase/SQL migrations in ${migrations} file(s) (RLS, permissive policies, SECURITY DEFINER, anon grants, dynamic SQL in functions, policies that trust user_metadata, views that skip RLS)`,
-      `Migraciones de Supabase/SQL en ${migrations} fichero(s) (RLS, políticas permisivas, SECURITY DEFINER, permisos a anon, SQL dinámico en funciones, políticas que confían en user_metadata, vistas que se saltan RLS)`,
+      `Migraciones de Supabase/SQL en ${migrations} archivo(s) (RLS, políticas permisivas, SECURITY DEFINER, permisos a anon, SQL dinámico en funciones, políticas que confían en user_metadata, vistas que se saltan RLS)`,
+    );
+  } else if (migrations > 0) {
+    // No Supabase here, so the RLS rules have nothing to say and naming them would suggest the
+    // project was judged on a model it does not use.
+    cov.checked(
+      AREA.sqlMigrations,
+      `SQL migrations in ${migrations} file(s) (SECURITY DEFINER and dynamic SQL in functions, grants)`,
+      `Migraciones SQL en ${migrations} archivo(s) (SECURITY DEFINER y SQL dinámico en funciones, permisos)`,
     );
   } else if (supabaseContext) {
     // The loudest silence this scanner had. A Supabase project whose schema is managed in the
@@ -303,13 +314,13 @@ export function folderCoverage(input: {
     cov.notEvaluated(
       AREA.sqlMigrations,
       'this looks like a Supabase project but no .sql migration files were found — RLS, policies and SECURITY DEFINER were never examined. Schema managed in the dashboard is invisible here; scan the live URL, or export it with `vibeward supabase-sql`',
-      'esto parece un proyecto de Supabase pero no se encontró ningún fichero de migración .sql — RLS, políticas y SECURITY DEFINER no se examinaron. Un esquema gestionado desde el panel es invisible aquí; escanea la URL en vivo, o expórtalo con `vibeward supabase-sql`',
+      'esto parece un proyecto de Supabase pero no se encontró ningún archivo de migración .sql — RLS, políticas y SECURITY DEFINER no se examinaron. Un esquema gestionado desde el panel es invisible aquí; escanea la URL en vivo, o expórtalo con `vibeward supabase-sql`',
     );
   } else {
     cov.notApplicable(
       AREA.sqlMigrations,
       'no .sql files in the tree and nothing identifying this as a Supabase project',
-      'no hay ficheros .sql en el árbol ni nada que identifique esto como un proyecto de Supabase',
+      'no hay archivos .sql en el árbol ni nada que identifique esto como un proyecto de Supabase',
     );
   }
 
@@ -327,7 +338,7 @@ export function folderCoverage(input: {
   cov.notEvaluated(
     AREA.supabaseRls,
     'a folder scan reads files and never contacts the live backend — the deployed database was not probed. Scan the URL to cover it',
-    'un escaneo de carpeta lee ficheros y nunca contacta con el backend en vivo — no se sondeó la base de datos desplegada. Escanea la URL para cubrirlo',
+    'un escaneo de carpeta lee archivos y nunca contacta con el backend en vivo — no se sondeó la base de datos desplegada. Escanea la URL para cubrirlo',
   );
 
   return cov.entries();
@@ -371,7 +382,8 @@ export function runFolderScan(dir: string, args: Args): never {
         ),
       );
     } else {
-      findings.push(...onlyDeleted(history.findings, findings));
+      const deleted = onlyDeleted(history.findings, findings);
+      findings.push(...deleted);
       log(`${C.gray}▸ ${history.commits} commit(s) read${C.reset}`);
       if (history.shallow) {
         scanned.push(
@@ -387,8 +399,11 @@ export function runFolderScan(dir: string, args: Args): never {
           entry(
             AREA.gitHistory,
             'checked',
-            `Keys added in ${history.commits} commit(s) across every branch and tag, deleted since`,
-            `Claves agregadas en ${history.commits} commit(s) de todas las ramas y tags, y borradas después`,
+            // Said with its result, so "searched" cannot be read as "found". The count is of
+            // commits with changes of their own — a merge adds none — so it can sit below
+            // `git rev-list --all --count`.
+            `Keys that were added and later deleted, searched in ${history.commits} commit(s) with changes across every branch and tag (merges add none of their own): ${deleted.length === 0 ? 'none' : `${deleted.length} found`}`,
+            `Claves que se agregaron y luego se borraron, buscadas en ${history.commits} commit(s) con cambios de todas las ramas y tags (los merges no agregan nada propio): ${deleted.length === 0 ? 'ninguna' : `${deleted.length} encontrada(s)`}`,
           ),
         );
         if (history.capped) {
@@ -420,5 +435,5 @@ export function runFolderScan(dir: string, args: Args): never {
     ignoreUnchecked: supabaseContext ? [] : [AREA.supabaseRls],
   });
 
-  finish(dir, findings, null, scanned, { ...args, active: false }, { pending });
+  finish(dir, findings, null, scanned, { ...args, active: false, folder: true }, { pending });
 }

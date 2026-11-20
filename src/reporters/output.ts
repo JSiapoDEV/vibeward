@@ -29,6 +29,8 @@ export interface FinishOptions {
   lang?: Lang;
   /** False in `--passive`: nothing beyond publicly-served assets was requested. */
   active?: boolean;
+  /** A folder scan: the report describes a review of files, not a probe from outside. */
+  folder?: boolean;
   /** Also write the CI summary (run page, pinned issue) to this path. */
   summary?: string;
   /** The summary will be readable by anyone: count findings, never name or place them. */
@@ -165,6 +167,7 @@ export function finish(
     configPath: extras.configPath,
     pending: extras.pending,
     trustCenter: extras.trustCenter,
+    folder: opts.folder === true,
   });
   const pending = extras.pending ?? [];
 
@@ -230,6 +233,7 @@ export function finish(
       task: coverageText(p.task, lang),
       why: coverageText(p.why, lang),
       files: p.files,
+      total: p.total ?? p.files.length,
     })),
     /** The same, as one message to paste into a builder's chat. Null when nothing is pending. */
     builderPrompt: builderPrompt(localized, pending, lang),

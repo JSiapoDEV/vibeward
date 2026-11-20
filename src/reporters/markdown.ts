@@ -8,6 +8,7 @@ import { coverage, coverageText } from '../core/i18n.js';
 import type { CoverageLine, Lang } from '../core/i18n.js';
 import type { CoverageEntry } from '../core/coverage.js';
 import { VERSION } from '../core/version.js';
+import { basename, resolve } from 'node:path';
 import { REPORT } from './strings.js';
 import type { RlsResult } from '../checks/supabase.js';
 import type { StackFingerprint } from '../checks/web.js';
@@ -41,6 +42,8 @@ export interface ReportInput {
   configPath?: string | null;
   /** Fixed tasks for a person or an agent, rendered before the next steps. */
   pending?: PendingItem[];
+  /** A scan of a folder rather than of a URL: the scope, coverage and footer say so. */
+  folder?: boolean;
   /** Lovable's published checks, set beside this scan's results. */
   trustCenter?: TrustCenterView | null;
 }
@@ -302,6 +305,7 @@ export function buildReport({
   configPath,
   pending = [],
   trustCenter = null,
+  folder = false,
 }: ReportInput): ReportOutput {
   const t = REPORT[lang];
   const security = findings.filter((f) => !isWeb(f));
@@ -325,9 +329,10 @@ export function buildReport({
 
   let md = '';
   md += `# ${t.title(hasWeb)}\n\n`;
-  md += `**${t.application}:** ${target}\n\n`;
+  // A folder is named by its folder name: `scan .` used to print "Application: .".
+  md += `**${t.application}:** ${folder ? basename(resolve(target)) : target}\n\n`;
   md += `**${t.date}:** ${dateISO}\n\n`;
-  md += `**${lang === 'es' ? 'Alcance' : 'Scope'}:** ${t.scope(hasWeb, active)}\n\n`;
+  md += `**${lang === 'es' ? 'Alcance' : 'Scope'}:** ${t.scope(hasWeb, active, folder)}\n\n`;
   md += `---\n\n`;
 
   md += `## ${t.executiveSummary}\n\n`;
@@ -387,7 +392,8 @@ export function buildReport({
       if (f.references?.length) {
         md += `**${t.fReferences}:** ${f.references.map((r) => `<${r}>`).join(' · ')}\n\n`;
       }
-      if (f.check) md += `${t.fChecklist(f.check)}\n\n\n`;
+      // The checklist number stays in the JSON and the SARIF, where a tool can use it. In the
+      // report it pointed at a list the reader does not have.
     });
   }
 
@@ -409,7 +415,7 @@ export function buildReport({
 
   md += `---\n\n`;
   md += `## ${t.coverageTitle}\n\n`;
-  md += `${t.coverageBlurb}\n\n`;
+  md += `${t.coverageBlurb(folder)}\n\n`;
   md += `### ${t.verifiedAutomatically}\n`;
   const verified = scanned.filter((e) => e.status === 'checked');
   if (verified.length === 0) md += `${t.nothingVerified}\n`;
@@ -448,7 +454,7 @@ export function buildReport({
   // No claim about who authorized this. vibeward is not in a position to certify the
   // operator's relationship to the site, and a report that asserts it on their behalf is a
   // liability the moment it is forwarded to anyone.
-  md += `${t.footer(VERSION)}\n`;
+  md += `${t.footer(VERSION, folder)}\n`;
 
   return {
     markdown: md,

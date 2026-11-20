@@ -86,7 +86,7 @@ const EXPECTED: ExpectedHeader[] = [
       label: 'X-Content-Type-Options',
       exploit:
         'El navegador puede deducir por los bytes un tipo distinto del declarado (MIME sniffing), lo que habilita algunos ataques de ejecución de scripts.',
-      why: 'Sin `X-Content-Type-Options: nosniff` el navegador puede desconfiar del Content-Type declarado y tratar un fichero como lo que parezcan sus bytes. El caso clásico es una imagen subida que además se interpreta como script. Es una cabecera con un valor y sin contrapartidas.',
+      why: 'Sin `X-Content-Type-Options: nosniff` el navegador puede desconfiar del Content-Type declarado y tratar un archivo como lo que parezcan sus bytes. El caso clásico es una imagen subida que además se interpreta como script. Es una cabecera con un valor y sin contrapartidas.',
     },
   },
 ];

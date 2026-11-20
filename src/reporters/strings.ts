@@ -17,7 +17,7 @@ export interface ReportStrings {
   title: (hasWeb: boolean) => string;
   application: string;
   date: string;
-  scope: (hasWeb: boolean, active: boolean) => string;
+  scope: (hasWeb: boolean, active: boolean, folder: boolean) => string;
 
   executiveSummary: string;
   severityTableHead: string;
@@ -73,7 +73,7 @@ export interface ReportStrings {
   noBrowser: string;
 
   coverageTitle: string;
-  coverageBlurb: string;
+  coverageBlurb: (folder: boolean) => string;
   verifiedAutomatically: string;
   nothingVerified: string;
   notVerifiedTitle: string;
@@ -91,17 +91,19 @@ export interface ReportStrings {
   };
   nextStepsNormal: string;
   initHint: string;
-  footer: (version: string) => string;
+  footer: (version: string, folder: boolean) => string;
 }
 
 const EN: ReportStrings = {
   title: (hasWeb) => (hasWeb ? 'Audit Report' : 'Security Audit Report'),
   application: 'Application',
   date: 'Date',
-  scope: (hasWeb, active) =>
-    `${active ? 'Automated, non-destructive' : 'Automated, read-only'} analysis of the public frontend and data API${
-      hasWeb ? ', plus website quality and AI visibility' : ''
-    }. Does not include manual penetration testing or server-side code review.`,
+  scope: (hasWeb, active, folder) =>
+    folder
+      ? "Automated, read-only review of the project's files: secrets, server routes, SQL migrations and configuration. It does not run the app or connect to its live database, and it is not a manual penetration test."
+      : `${active ? 'Automated, non-destructive' : 'Automated, read-only'} analysis of the public frontend and data API${
+          hasWeb ? ', plus website quality and AI visibility' : ''
+        }. Does not include manual penetration testing or server-side code review.`,
 
   executiveSummary: 'Executive summary',
   severityTableHead: '| Severity | Findings |\n|---|---|',
@@ -149,9 +151,9 @@ const EN: ReportStrings = {
   fClassification: 'Classification',
   fWhere: 'Where',
   fEvidence: 'Evidence',
-  fExploit: "How it's exploited",
+  fExploit: 'Risk',
   fImpact: 'Impact',
-  fWhy: 'Why it matters',
+  fWhy: 'What to do',
   fReferences: 'References',
   fPages: 'Pages',
   fChecklist: (n) => `_Checklist item ${n}._`,
@@ -178,8 +180,10 @@ const EN: ReportStrings = {
   noBrowser: 'no browser available',
 
   coverageTitle: 'Coverage',
-  coverageBlurb:
-    'This automated analysis covers what is verifiable from the outside. Items that require server access (authorization, input validation, rate limiting, backups) are covered by the manual part of the audit.',
+  coverageBlurb: (folder) =>
+    folder
+      ? "This automated review covers the project's files. What only shows up with the app running — authorization behind a login, rate limits, backups — needs a person."
+      : 'This automated analysis covers what is verifiable from the outside. Items that require server access (authorization, input validation, rate limiting, backups) are covered by the manual part of the audit.',
   verifiedAutomatically: 'Verified automatically',
   nothingVerified: '_Nothing was verified in this run._',
   notVerifiedTitle: 'Not verified in this run',
@@ -200,18 +204,22 @@ const EN: ReportStrings = {
     '1. Address findings in order of severity.\n2. Complement with a manual server-side review.',
   initHint:
     'For the website section, `npx vibeward@latest init` installs a skill that reads these findings, applies the fixes it can, and re-scans to verify.',
-  footer: (version) =>
-    `_Generated with vibeward v${version} — an automated, non-destructive analysis performed from the outside._`,
+  footer: (version, folder) =>
+    folder
+      ? `_Generated with vibeward v${version} — an automated, read-only review of the project's files._`
+      : `_Generated with vibeward v${version} — an automated, non-destructive analysis performed from the outside._`,
 };
 
 const ES: ReportStrings = {
   title: (hasWeb) => (hasWeb ? 'Informe de auditoría' : 'Informe de auditoría de seguridad'),
   application: 'Aplicación',
   date: 'Fecha',
-  scope: (hasWeb, active) =>
-    `Análisis automatizado y ${active ? 'no destructivo' : 'de solo lectura'} del frontend público y de la API de datos${
-      hasWeb ? ', más la calidad del sitio y su visibilidad ante las IA' : ''
-    }. No incluye pruebas de intrusión manuales ni revisión del código de servidor.`,
+  scope: (hasWeb, active, folder) =>
+    folder
+      ? 'Revisión automatizada y de solo lectura de los archivos del proyecto: secretos, rutas del servidor, migraciones SQL y configuración. No ejecuta la app ni se conecta a su base de datos en vivo, y no es una prueba de intrusión manual.'
+      : `Análisis automatizado y ${active ? 'no destructivo' : 'de solo lectura'} del frontend público y de la API de datos${
+          hasWeb ? ', más la calidad del sitio y su visibilidad ante las IA' : ''
+        }. No incluye pruebas de intrusión manuales ni revisión del código de servidor.`,
 
   executiveSummary: 'Resumen ejecutivo',
   severityTableHead: '| Severidad | Hallazgos |\n|---|---|',
@@ -261,9 +269,9 @@ const ES: ReportStrings = {
   fClassification: 'Clasificación',
   fWhere: 'Dónde',
   fEvidence: 'Evidencia',
-  fExploit: 'Cómo se explota',
+  fExploit: 'Riesgo',
   fImpact: 'Impacto',
-  fWhy: 'Por qué importa',
+  fWhy: 'Qué hacer',
   fReferences: 'Referencias',
   fPages: 'Páginas',
   fChecklist: (n) => `_Punto ${n} de la checklist._`,
@@ -290,8 +298,10 @@ const ES: ReportStrings = {
   noBrowser: 'no hay navegador disponible',
 
   coverageTitle: 'Alcance verificado',
-  coverageBlurb:
-    'Este análisis automatizado cubre lo que se puede verificar desde fuera. Lo que exige acceso al servidor (autorización, validación de entradas, límites de tasa, copias de seguridad) corresponde a la parte manual de la auditoría.',
+  coverageBlurb: (folder) =>
+    folder
+      ? 'Esta revisión automatizada cubre los archivos del proyecto. Lo que solo aparece con la app funcionando —autorización detrás de un login, límites de uso, copias de seguridad— necesita a una persona.'
+      : 'Este análisis automatizado cubre lo que se puede verificar desde fuera. Lo que exige acceso al servidor (autorización, validación de entradas, límites de tasa, copias de seguridad) corresponde a la parte manual de la auditoría.',
   verifiedAutomatically: 'Verificado automáticamente',
   nothingVerified: '_En esta ejecución no se verificó nada._',
   notVerifiedTitle: 'Sin verificar en esta ejecución',
@@ -312,8 +322,10 @@ const ES: ReportStrings = {
     '1. Atiende los hallazgos por orden de severidad.\n2. Complétalo con una revisión manual del lado del servidor.',
   initHint:
     'Para la sección del sitio web, `npx vibeward@latest init` instala una skill que lee estos hallazgos, aplica los arreglos que puede y vuelve a escanear para verificarlo.',
-  footer: (version) =>
-    `_Generado con vibeward v${version} — análisis automatizado y no destructivo realizado desde fuera._`,
+  footer: (version, folder) =>
+    folder
+      ? `_Generado con vibeward v${version} — revisión automatizada y de solo lectura de los archivos del proyecto._`
+      : `_Generado con vibeward v${version} — análisis automatizado y no destructivo realizado desde fuera._`,
 };
 
 export const REPORT: Record<Lang, ReportStrings> = { en: EN, es: ES };

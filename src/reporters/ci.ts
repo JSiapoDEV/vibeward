@@ -12,7 +12,7 @@
 // prints a finding's evidence, on any repository: evidence is where a secret would be quoted.
 
 import { VERSION } from '../core/version.js';
-import { builderPrompt, type PendingItem } from '../core/pending.js';
+import { builderPrompt, moreText, type PendingItem } from '../core/pending.js';
 import { coverageText, type Lang } from '../core/i18n.js';
 import { isWeb, type Finding, type Severity } from '../core/types.js';
 
@@ -56,9 +56,9 @@ const T = {
     more: (n: number) => `…y ${n} más en el informe y en la pestaña Security.`,
     publicNote:
       'Este repositorio es público, así que esta página no dice qué ni dónde: cualquiera puede leerla. El detalle está en la pestaña **Security**, que solo abren quienes tienen permiso de escritura, y en el informe de una corrida local (`npx vibeward scan .`).',
-    pending: 'Pendientes — para ti o tu constructor',
+    pending: 'Pendientes — para ti o tu herramienta de IA',
     files: 'Archivos',
-    kind: { review: 'Revisar', platform: 'Tu constructor', unchecked: 'No revisado' },
+    kind: { review: 'Revisar', platform: 'Tu herramienta de IA', unchecked: 'No revisado' },
     prompt: 'Prompt para pegar en Lovable, Bolt, v0 o tu agente',
     footer:
       'vibeward es determinista: aquí no corrió ninguna IA, y el mismo commit da siempre la misma lista. Marca lo que vayas resolviendo; la lista se rehace en cada push y el issue se cierra solo cuando no queda nada.',
@@ -102,7 +102,7 @@ export function ciSummary(input: CiSummaryInput): string {
     for (const item of input.pending) {
       md += `- [ ] **${t.kind[item.kind]}** — ${coverageText(item.task, input.lang)}\n`;
       if (item.files.length > 0) {
-        md += `  ${t.files}: ${item.files.map((f) => `\`${f}\``).join(', ')}\n`;
+        md += `  ${t.files}: ${item.files.map((f) => `\`${f}\``).join(', ')}${moreText(item, input.lang)}\n`;
       }
     }
     md += '\n';

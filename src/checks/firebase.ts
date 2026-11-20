@@ -80,9 +80,9 @@ export function firebaseStorageFinding(bucket: string): Finding {
     es: {
       label: 'El bucket de Firebase Storage se puede listar públicamente',
       evidence: 'El endpoint de listado de objetos devolvió 200 sin autenticación.',
-      exploit: `Cualquiera pide \`https://firebasestorage.googleapis.com/v0/b/${bucket}/o\` para enumerar todos los ficheros guardados y luego se descarga cada uno — el patrón de la brecha de Tea (documentos de identidad y selfies).`,
+      exploit: `Cualquiera pide \`https://firebasestorage.googleapis.com/v0/b/${bucket}/o\` para enumerar todos los archivos guardados y luego se descarga cada uno — el patrón de la brecha de Tea (documentos de identidad y selfies).`,
       impact:
-        'Todos los ficheros subidos (que en apps hechas con vibe-coding suelen incluir fotos de documentos, recibos y subidas de usuarios) se pueden enumerar y descargar por cualquiera.',
+        'Todos los archivos subidos (que en apps hechas con vibe-coding suelen incluir fotos de documentos, recibos y subidas de usuarios) se pueden enumerar y descargar por cualquiera.',
       why: 'Las reglas de Storage permiten el listado público. Restringe `allow read` a los propietarios autenticados y nunca dejes un bucket en modo de pruebas.',
     },
     label: `Firebase Storage bucket is publicly listable`,

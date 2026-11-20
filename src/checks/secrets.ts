@@ -409,7 +409,12 @@ function evidenceOf(raw: string, extra: Record<string, string>): string {
   return extra.snippet ?? extra.key ?? (extra.role ? `JWT role=${extra.role}` : mask(raw));
 }
 
-const OWN_EXPLOIT = new Set(['generic_secret_assign', 'firebase_web_api_key']);
+const OWN_EXPLOIT = new Set([
+  'generic_secret_assign',
+  'firebase_web_api_key',
+  'firebase_android_api_key',
+  'firebase_ios_api_key',
+]);
 
 function buildFinding(
   pat: SecretPattern,
@@ -468,7 +473,7 @@ const BEARER_PATTERN: SecretPattern = {
   es: {
     label: 'Token bearer hardcodeado en el código del cliente',
     exploit:
-      'El token está en un fichero que el sitio sirve a todo el mundo, así que todos los visitantes tienen la misma credencial. Cualquiera que abra la pestaña de red puede reutilizarlo contra las rutas de API que autoriza.',
+      'El token está en un archivo que el sitio sirve a todo el mundo, así que todos los visitantes tienen la misma credencial. Cualquiera que abra la pestaña de red puede reutilizarlo contra las rutas de API que autoriza.',
     why: 'Un token bearer compilado en el bundle es un secreto compartido que se le entrega a cada visitante, y no se puede revocar para uno sin revocarlo para todos. Que dé acceso a algo depende de lo que haga el servidor con él — pero un token estático en código de cliente no es autenticación, y si es la única comprobación, la API es pública de hecho.',
   },
   label: 'Hardcoded bearer token in client code',
@@ -577,26 +582,80 @@ function* matchBearerTokens(text: string): Generator<RawMatch> {
  * else the key can call: unrestricted, it works against every Google API enabled in the
  * project, including paid ones. The finding asks for that, at the severity that matches.
  */
-const FIREBASE_WEB_KEY: SecretPattern = {
-  id: 'firebase_web_api_key',
-  es: {
-    label: 'Clave web de Firebase — confirma que esté restringida',
-    exploit:
-      'Esta clave está hecha para ir en el navegador: el SDK de Firebase la necesita, y por sí sola no abre tus datos (eso lo deciden tus reglas de seguridad). El riesgo es qué más puede llamar: sin restricciones, cualquiera puede usarla contra cualquier API de Google activada en el proyecto, incluidas las de pago como Gemini o Maps, a tu costa.',
-    why: 'No la rotes: una clave nueva quedaría igual de visible. En Google Cloud Console → APIs y servicios → Credenciales, restríngela a tu app (la web por referente HTTP; Android por nombre de paquete y huella SHA-1; iOS por bundle ID) y a las APIs que usa: Identity Toolkit y Token Service para el inicio de sesión, y Firebase Installations y FCM Registration si usa notificaciones. Después prueba que el inicio de sesión y las notificaciones sigan funcionando.',
+type FirebasePlatform = 'web' | 'android' | 'ios';
+
+const FIREBASE_TEXT: Record<
+  FirebasePlatform,
+  { label: string; labelEs: string; where: string; whereEs: string; how: string; howEs: string }
+> = {
+  web: {
+    label: 'Firebase web API key',
+    labelEs: 'Clave web de Firebase',
+    where: 'This key is meant to be in the browser: the Firebase SDK needs it',
+    whereEs: 'Esta clave está hecha para ir en el navegador: el SDK de Firebase la necesita',
+    how: 'restrict it to your sites (HTTP referrers)',
+    howEs: 'restríngela a tus sitios (referentes HTTP)',
   },
-  label: 'Firebase web API key — confirm it is restricted',
-  severity: 'low',
-  check: 2,
-  cwe: 'CWE-284',
-  regex: /(?!)/g,
-  exploit:
-    'This key is meant to be in the browser: the Firebase SDK needs it, and on its own it opens none of your data — your Security Rules decide that. The risk is what else it can call: unrestricted, anyone can use it against any Google API enabled in the project, including paid ones like Gemini or Maps, on your bill.',
-  why: 'Do not rotate it: a new key would be just as visible. In Google Cloud Console → APIs & Services → Credentials, restrict it to your app (the web by HTTP referrer, Android by package name and SHA-1, iOS by bundle ID) and to the APIs it uses: Identity Toolkit and Token Service for sign-in, plus Firebase Installations and FCM Registration if it sends notifications. Then check that sign-in and notifications still work.',
-  references: [
-    'https://firebase.google.com/docs/projects/api-keys',
-    'https://cloud.google.com/docs/authentication/api-keys#adding-api-restrictions',
-  ],
+  android: {
+    label: 'Firebase API key for Android',
+    labelEs: 'Clave de Firebase para Android',
+    where:
+      'This key ships inside the app: the Firebase SDK reads it from google-services.json and anyone can pull it out of the APK',
+    whereEs:
+      'Esta clave va dentro de la app: el SDK de Firebase la lee de google-services.json y cualquiera puede sacarla del APK',
+    how: 'restrict it to Android apps — your package name and the SHA-1 of the signing certificate (the Play App Signing one too, if you use it)',
+    howEs:
+      'restríngela a apps Android: tu nombre de paquete y la huella SHA-1 del certificado de firma (también la de Play App Signing, si la usas)',
+  },
+  ios: {
+    label: 'Firebase API key for iOS',
+    labelEs: 'Clave de Firebase para iOS',
+    where:
+      'This key ships inside the app: the Firebase SDK reads it from GoogleService-Info.plist and anyone can pull it out of the IPA',
+    whereEs:
+      'Esta clave va dentro de la app: el SDK de Firebase la lee de GoogleService-Info.plist y cualquiera puede sacarla del IPA',
+    how: 'restrict it to iOS apps — your bundle ID',
+    howEs: 'restríngela a apps iOS: tu bundle ID',
+  },
+};
+
+/**
+ * A Google API key that is a Firebase app's `apiKey`, on the web, Android or iOS.
+ *
+ * That key is public by design: the Firebase SDK needs it where the app runs, it opens no data
+ * on its own — Security Rules do that — and a rotated key is just as visible as the old one. So
+ * "a Google key leaked, rotate it" is the wrong sentence twice over. The real question is what
+ * else the key can call: unrestricted, it works against every Google API enabled in the
+ * project, including paid ones. Each platform gets its own name and only its own restriction —
+ * telling someone their Android key "is meant to be in the browser" is how a report loses them.
+ */
+function firebaseKeyPattern(platform: FirebasePlatform): SecretPattern {
+  const t = FIREBASE_TEXT[platform];
+  return {
+    id: `firebase_${platform}_api_key`,
+    es: {
+      label: `${t.labelEs} — confirma que esté restringida`,
+      exploit: `${t.whereEs}, y por sí sola no abre tus datos (eso lo deciden tus reglas de seguridad). El riesgo es qué más puede llamar: sin restricciones, cualquiera puede usarla contra cualquier API de Google activada en el proyecto, incluidas las de pago como Gemini o Maps, a tu costa.`,
+      why: `No la rotes: una clave nueva quedaría igual de visible. En Google Cloud Console → APIs y servicios → Credenciales, ${t.howEs}, y limítala a las APIs que usa la app: Identity Toolkit y Token Service para el inicio de sesión, y Firebase Installations y FCM Registration si usa notificaciones. Después prueba que el inicio de sesión y las notificaciones sigan funcionando.`,
+    },
+    label: `${t.label} — confirm it is restricted`,
+    severity: 'low',
+    check: 2,
+    cwe: 'CWE-284',
+    regex: /(?!)/g,
+    exploit: `${t.where}, and on its own it opens none of your data — your Security Rules decide that. The risk is what else it can call: unrestricted, anyone can use it against any Google API enabled in the project, including paid ones like Gemini or Maps, on your bill.`,
+    why: `Do not rotate it: a new key would be just as visible. In Google Cloud Console → APIs & Services → Credentials, ${t.how}, and limit it to the APIs the app uses: Identity Toolkit and Token Service for sign-in, plus Firebase Installations and FCM Registration if it sends notifications. Then check that sign-in and notifications still work.`,
+    references: [
+      'https://firebase.google.com/docs/projects/api-keys',
+      'https://cloud.google.com/docs/authentication/api-keys#adding-api-restrictions',
+    ],
+  };
+}
+
+const FIREBASE_KEYS: Record<FirebasePlatform, SecretPattern> = {
+  web: firebaseKeyPattern('web'),
+  android: firebaseKeyPattern('android'),
+  ios: firebaseKeyPattern('ios'),
 };
 
 /** What sits next to a Firebase web config, minified or not, in code or in a `.env`. */
@@ -606,9 +665,13 @@ const FIREBASE_CONTEXT =
 /** How far around a key to look for its Firebase config. A config object is a few hundred bytes. */
 const FIREBASE_WINDOW = 600;
 
-function isFirebaseWebKey(text: string, index: number, length: number): boolean {
+/** Which Firebase app a Google key belongs to, from the config around it; null when none. */
+function firebasePlatform(text: string, index: number, length: number): FirebasePlatform | null {
   const around = text.slice(Math.max(0, index - FIREBASE_WINDOW), index + length + FIREBASE_WINDOW);
-  return FIREBASE_CONTEXT.test(around);
+  if (!FIREBASE_CONTEXT.test(around)) return null;
+  if (/mobilesdk_app_id|:android:|"client_info"/.test(around)) return 'android';
+  if (/GOOGLE_APP_ID|BUNDLE_ID|:ios:/.test(around)) return 'ios';
+  return 'web';
 }
 
 /** The literal a `generic_secret_assign` match assigns, quotes stripped. */
@@ -641,10 +704,9 @@ function* matchSecrets(text: string): Generator<RawMatch> {
         const literal = assignedLiteral(raw);
         if (literal && named.some((v) => literal.includes(v) || v.includes(literal))) continue;
       }
-      const found =
-        pat.id === 'google_api_key' && isFirebaseWebKey(text, m.index, raw.length)
-          ? FIREBASE_WEB_KEY
-          : pat;
+      const platform =
+        pat.id === 'google_api_key' ? firebasePlatform(text, m.index, raw.length) : null;
+      const found = platform ? FIREBASE_KEYS[platform] : pat;
       const key = `${found.id}:${raw}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -657,7 +719,7 @@ function* matchSecrets(text: string): Generator<RawMatch> {
 /** Every id a secret finding can carry, for the pass that folds one key found in many files. */
 export const SECRET_IDS = new Set<string>([
   ...SECRET_PATTERNS.map((p) => p.id),
-  FIREBASE_WEB_KEY.id,
+  ...Object.values(FIREBASE_KEYS).map((p) => p.id),
   'hardcoded_bearer',
 ]);
 
@@ -816,13 +878,13 @@ export function asLocalOnly(f: Finding): Finding {
     severity: 'low',
     label: `${f.label} — in a file git ignores`,
     exploit:
-      'This file is ignored by git and was never committed, so the key has not leaked. It is still a working key on this machine and in its backups.',
+      'This file is ignored by git and was never committed, so the key has not leaked. It may still work, on this machine and in its backups.',
     why: 'If the app no longer uses it, delete it from the file and revoke it at the provider. If it does, keep it here — this is where it belongs.',
     es: {
       ...f.es,
       label: `${f.es?.label ?? f.label} — en un archivo que git ignora`,
       exploit:
-        'Git ignora este archivo y nunca se commiteó, así que la clave no se filtró. Sigue siendo una clave que funciona, en esta máquina y en sus copias de seguridad.',
+        'Git ignora este archivo y nunca se subió a git, así que la clave no se filtró. Puede seguir funcionando, en esta máquina y en sus copias de seguridad.',
       why: 'Si la app ya no la usa, bórrala del archivo y anúlala en el proveedor. Si la usa, déjala aquí: es su lugar.',
     },
   };

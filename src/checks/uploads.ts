@@ -176,12 +176,12 @@ export function checkUploadValidation(path: string, content: string): Finding | 
     es: {
       label:
         'La subida de archivos se valida por el nombre o el tipo declarado, no por el contenido',
-      evidence: `El tipo se comprueba con \`${quote}\`, y nada en el fichero lee el contenido (magic bytes, file-type, finfo…).`,
+      evidence: `El tipo se comprueba con \`${quote}\`, y nada en el archivo lee el contenido (magic bytes, file-type, finfo…).`,
       exploit:
         'La extensión, el atributo `accept` y el tipo MIME los escribe quien envía la petición. Un `shell.php` o un `.html` con JavaScript, renombrado a `foto.png` y enviado con `Content-Type: image/png` por curl, pasa todas esas comprobaciones — el `accept` ni siquiera se ejecuta, porque vive en el navegador.',
       impact:
         'Según dónde se guarde y cómo se sirva, eso es XSS almacenado desde tu propio dominio (un SVG o HTML servido como tal), ejecución de código si la carpeta interpreta scripts, o malware alojado a tu nombre.',
-      why: 'Comprueba el tipo por lo único que el remitente no elige: los primeros bytes del fichero. Léelos en el servidor — en la ruta, o en una Edge Function o trigger del bucket si el navegador sube directo al storage — y compáralos con una lista de tipos permitidos (`file-type` en Node, `python-magic` o `filetype` en Python, `finfo` en PHP, `http.DetectContentType` en Go). Guarda con un nombre generado y una extensión derivada de ese tipo detectado, nunca la que envió el usuario. El `accept` y el tipo MIME pueden quedarse como ayuda de interfaz, no como control.',
+      why: 'Comprueba el tipo por lo único que el remitente no elige: los primeros bytes del archivo. Léelos en el servidor — en la ruta, o en una Edge Function o trigger del bucket si el navegador sube directo al storage — y compáralos con una lista de tipos permitidos (`file-type` en Node, `python-magic` o `filetype` en Python, `finfo` en PHP, `http.DetectContentType` en Go). Guarda con un nombre generado y una extensión derivada de ese tipo detectado, nunca la que envió el usuario. El `accept` y el tipo MIME pueden quedarse como ayuda de interfaz, no como control.',
     },
     label: 'File upload is validated by its name or declared type, not its content',
     severity: 'high',

@@ -762,12 +762,12 @@ export function checkWeb(input: {
                 managed.covers === 'all'
                   ? 'La regla no está escrita en el `robots.txt` del sitio'
                   : 'Parte de la regla no está escrita en el `robots.txt` del sitio'
-              }: vive dentro de un bloque que ${managed.vendor} inyecta en la respuesta, entre sus marcadores \`# BEGIN\` y \`# END\`. Editar el fichero del repositorio no cambia nada, porque esa no es la copia que se está sirviendo — se desactiva en el panel de ${managed.vendor} de esta zona, en AI Crawl Control / el ajuste de robots.txt gestionado.${
+              }: vive dentro de un bloque que ${managed.vendor} inyecta en la respuesta, entre sus marcadores \`# BEGIN\` y \`# END\`. Editar el archivo del repositorio no cambia nada, porque esa no es la copia que se está sirviendo — se desactiva en el panel de ${managed.vendor} de esta zona, en AI Crawl Control / el ajuste de robots.txt gestionado.${
                 managed.covers === 'some'
                   ? ` Los agentes restantes sí están declarados fuera del bloque gestionado, y esos se arreglan borrando solo la línea \`Disallow: /\` de ${blockingAgents.length === 1 ? 'ese grupo' : 'esos grupos'}.`
                   : ''
               }`
-            : `Es una línea en un fichero de texto, y casi siempre está ahí por copiar y pegar, no por decisión. Se deshace borrando solo la línea \`Disallow: /\` dentro de ${blockingAgents.length === 1 ? 'ese grupo' : 'esos grupos'} — el resto de líneas del fichero está haciendo su trabajo y debe quedarse.`
+            : `Es una línea en un archivo de texto, y casi siempre está ahí por copiar y pegar, no por decisión. Se deshace borrando solo la línea \`Disallow: /\` dentro de ${blockingAgents.length === 1 ? 'ese grupo' : 'esos grupos'} — el resto de líneas del archivo está haciendo su trabajo y debe quedarse.`
         }${
           viaWildcard
             ? ' Si de verdad hay rutas privadas, nómbralas (`Disallow: /admin`) en vez de usar un `/` a secas.'
@@ -806,7 +806,7 @@ export function checkWeb(input: {
       id: 'web_broken_assets',
       es: {
         label: 'Recursos referenciados por el sitio devuelven error',
-        evidence: `${brokenAssets.length} fichero(s) referenciado(s) responden con 4xx/5xx — ${listed
+        evidence: `${brokenAssets.length} archivo(s) referenciado(s) responden con 4xx/5xx — ${listed
           .map((a) => `${a.url} → ${a.status} (referenciado desde ${a.from})`)
           .join(' · ')}${
           brokenAssets.length > listed.length
@@ -815,7 +815,7 @@ export function checkWeb(input: {
         }`,
         impact:
           'El visitante ve imágenes que faltan, secciones sin estilo o una función que nunca carga — la forma más rápida de parecer abandonado y perder la venta en la primera pantalla.',
-        why: 'La página apunta a ficheros que no están desplegados: una ruta que solo existe en local, un recurso renombrado o una imagen que el build nunca copió. Los recursos que se sirven desde la raíz tienen que vivir en `public/` (Vite, Next.js, Astro) o en `static/` (SvelteKit) para que el build los copie — si no, la referencia sobra.',
+        why: 'La página apunta a archivos que no están desplegados: una ruta que solo existe en local, un recurso renombrado o una imagen que el build nunca copió. Los recursos que se sirven desde la raíz tienen que vivir en `public/` (Vite, Next.js, Astro) o en `static/` (SvelteKit) para que el build los copie — si no, la referencia sobra.',
       },
       label: 'Assets referenced by the site return an error',
       severity: 'high',
@@ -1074,7 +1074,7 @@ export function checkWeb(input: {
         label: 'Sin llms.txt',
         evidence: `${origin}/llms.txt no se sirve.`,
         impact:
-          'Cuando a un asistente le preguntan por este negocio, tiene que reconstruir la oferta con el marcado que consiga interpretar. Un fichero corto y bien escrito es la diferencia entre que lo describan bien y que lo describan mal.',
+          'Cuando a un asistente le preguntan por este negocio, tiene que reconstruir la oferta con el marcado que consiga interpretar. Un archivo corto y bien escrito es la diferencia entre que lo describan bien y que lo describan mal.',
         why: 'llms.txt es el resumen en texto plano que una IA lee primero: qué es el sitio, para quién es y qué páginas importan. Vive en `public/llms.txt` — un H1 con el nombre, una cita con una frase sobre la oferta y el público, y una lista `## Pages` con las páginas que merece la pena leer y una línea por cada una. Solo funciona si dice lo que el negocio vende de verdad; una versión de relleno es peor que ninguna, porque se lee como si fuera autoritativa.',
       },
       label: 'No llms.txt',
@@ -1122,7 +1122,7 @@ export function checkWeb(input: {
         evidence: `${imgWithoutAlt} de ${imgTotal} imágenes no tienen atributo alt, repartidas en ${ofPagesEs(affected.length, total)}.`,
         impact:
           'Los visitantes ciegos oyen "imagen" en lugar del producto, la búsqueda de imágenes no devuelve nunca estas fotos y, en varias jurisdicciones, es una obligación de accesibilidad y no un detalle.',
-        why: 'El texto alt es lo que una imagen le dice a quien —o a lo que— no puede verla: lectores de pantalla, búsqueda de imágenes y cualquier rastreador que indexe la página. Tiene que describir lo que la foto muestra de verdad, en el idioma de la página — lo que significa mirar cada imagen, no generar texto a partir del nombre del fichero. Las imágenes puramente decorativas llevan un `alt=""` vacío, que no es lo mismo que no llevar ninguno.',
+        why: 'El texto alt es lo que una imagen le dice a quien —o a lo que— no puede verla: lectores de pantalla, búsqueda de imágenes y cualquier rastreador que indexe la página. Tiene que describir lo que la foto muestra de verdad, en el idioma de la página — lo que significa mirar cada imagen, no generar texto a partir del nombre del archivo. Las imágenes puramente decorativas llevan un `alt=""` vacío, que no es lo mismo que no llevar ninguno.',
       },
       label: 'Images have no alt text',
       severity: 'medium',
@@ -1206,7 +1206,7 @@ export function checkWeb(input: {
         evidence: `Se descargan ${formatBytes(totalJs)} de JavaScript sin comprimir para renderizar la página (umbral: 1.0 MB).${inlineNoteEs}`,
         impact:
           'En un móvil de gama media con datos móviles la página se queda en blanco varios segundos, y una parte importante de los visitantes se va antes de que pinte — nunca llegan a ver la oferta.',
-        why: `Todo lo que bloquea el primer render — bundles externos y script en línea por igual — retrasa la página por código al que el visitante quizá no llegue nunca. Qué parte tiene la culpa es una medición, no una suposición: \`vite-bundle-visualizer\` o \`source-map-explorer\` te dicen qué bundle es, y ${heavyInline ? 'un script en línea de varios megas suele ser datos o plantillas que deberían ir en un fichero aparte cacheable o en una respuesta del servidor' : 'lo habitual es cargar de forma diferida todo lo que no hace falta para el primer pintado'}.`,
+        why: `Todo lo que bloquea el primer render — bundles externos y script en línea por igual — retrasa la página por código al que el visitante quizá no llegue nunca. Qué parte tiene la culpa es una medición, no una suposición: \`vite-bundle-visualizer\` o \`source-map-explorer\` te dicen qué bundle es, y ${heavyInline ? 'un script en línea de varios megas suele ser datos o plantillas que deberían ir en un archivo aparte cacheable o en una respuesta del servidor' : 'lo habitual es cargar de forma diferida todo lo que no hace falta para el primer pintado'}.`,
       },
       label: 'JavaScript payload is heavy',
       severity: 'low',

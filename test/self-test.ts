@@ -354,7 +354,7 @@ console.log('\n4. Report generation');
   assert(markdown.includes('email, phone'), 'report flags PII columns');
   assert(markdown.includes('NOT PRODUCTION-READY'), 'verdict reflects critical');
   assert(markdown.includes('Classification:'), 'report renders CWE classification');
-  assert(markdown.includes("How it's exploited:"), 'report renders exploit path');
+  assert(markdown.includes('Risk:'), 'report renders the risk');
   assert(markdown.includes('References:'), 'report renders references');
 }
 
@@ -652,22 +652,47 @@ console.log('\n18. Server-side backend checks (framework + ORM archetype)');
     'no flag outside a server action / route handler',
   );
 
-  // (c) spreadsheet/CSV formula injection
+  // (c) CSV formula injection. A spreadsheet library stores text as text; CSV is where a
+  // leading `=` becomes a formula, and the hand-rolled escaper that only doubles quotes is the
+  // usual way it happens.
+  const handRolled = [
+    'export function escapeCell(value: string | number | null): string {',
+    '  const str = value == null ? "" : String(value);',
+    '  if (/[",\\n]/.test(str)) return `"${str.replace(/"/g, \'""\')}"`;',
+    '  return str;',
+    '}',
+  ].join('\n');
+  const csv = checkExportFormulaInjection('apps/web/src/lib/csv.ts', handRolled);
   assert(
-    (
-      checkExportFormulaInjection(
-        'app/api/export/route.ts',
-        'import ExcelJS from "exceljs";\nsheet.addRow({ a: it.descripcion });',
-      )?.id ?? ''
-    ).startsWith('formula_injection_'),
-    'flags an exceljs export without formula sanitization',
+    csv?.id.startsWith('formula_injection_') === true,
+    'flags a hand-rolled CSV escaper that only quotes',
+  );
+  assert(csv?.source === 'apps/web/src/lib/csv.ts:3', 'and names the line of the escaper');
+  assert(
+    /Leave numbers as numbers/.test(csv?.why ?? '') && /montos? negativo/.test(csv?.es?.why ?? ''),
+    'the advice does not turn negative amounts into text',
   );
   assert(
     checkExportFormulaInjection(
       'app/api/export/route.ts',
-      'import ExcelJS from "exceljs";\n// sanitize formula prefixes here\nsheet.addRow(safe);',
+      'import { stringify } from "csv-stringify/sync";\nres.send(stringify(rows));',
+    )?.id.startsWith('formula_injection_') === true,
+    'flags a CSV library export with no neutralisation',
+  );
+  assert(
+    checkExportFormulaInjection(
+      'app/api/export/route.ts',
+      'import ExcelJS from "exceljs";\nsheet.addRow({ a: it.descripcion });',
     ) === null,
-    'no flag when sanitization is hinted',
+    'an exceljs export alone is not flagged: a string cell is stored as text',
+  );
+  assert(
+    checkExportFormulaInjection(
+      'app/api/export/route.ts',
+      handRolled +
+        '\n// neutralise formula prefixes\nconst safe = (v) => /^[=+\\-@]/.test(v) ? "\'" + v : v;',
+    ) === null,
+    'no flag when the formula prefix is handled',
   );
 }
 
@@ -1672,13 +1697,10 @@ console.log('\n32. Report language — the same document in Spanish');
   }).markdown;
 
   assert(es.includes('# Informe de auditoría'), 'the title is Spanish');
-  assert(
-    es.includes('Resumen ejecutivo') && es.includes('Por qué importa'),
-    'so is the scaffolding',
-  );
+  assert(es.includes('Resumen ejecutivo') && es.includes('Qué hacer'), 'so is the scaffolding');
   assert(es.includes('Cabeceras'), 'the coverage list uses its Spanish sentence');
   assert(es.includes('Falta la cabecera Content-Security-Policy'), 'and so are the findings');
-  assert(!es.includes('Why it matters'), 'no English field labels leak into a Spanish report');
+  assert(!es.includes('What to do'), 'no English field labels leak into a Spanish report');
 
   const en = buildReport({
     target: 'https://x.test',
@@ -1688,7 +1710,7 @@ console.log('\n32. Report language — the same document in Spanish');
     scanned: [covered('Headers', 'Cabeceras')],
     lang: 'en',
   }).markdown;
-  assert(en.includes('Why it matters') && !en.includes('Por qué importa'), 'English stays English');
+  assert(en.includes('What to do') && !en.includes('Qué hacer'), 'English stays English');
 
   // Everything that reaches the page, not just the findings: the fingerprint signal list and
   // the reason a check was skipped are prose a reader sees, and each was English at first.
@@ -3225,10 +3247,28 @@ console.log('\n45. A folder scan of a real repository — what git sees, and wha
   // Android's google-services.json is Firebase too.
   const key = ['AIza', 'Sy', 'Fake'.repeat(8), 'Q'].join('');
   const gsj = `{"project_info":{"project_number":"123","project_id":"demo"},"client":[{"client_info":{"mobilesdk_app_id":"1:123:android:abc"},"api_key":[{"current_key":"${key}"}]}]}`;
+  const android = scanSource(gsj, 'android/app/google-services.json');
   assert(
-    ids(scanSource(gsj, 'android/app/google-services.json')) === 'firebase_web_api_key',
-    "Android's google-services.json key is the Firebase finding, with app restrictions in the advice",
+    ids(android) === 'firebase_android_api_key' &&
+      /package name/.test(android[0]?.why ?? '') &&
+      !/browser|referrer/i.test(`${android[0]?.why} ${android[0]?.exploit}`),
+    "Android's key is named as Android, with only the Android restriction and no talk of a browser",
   );
+
+  const plist = `<dict><key>API_KEY</key><string>${key}</string><key>GOOGLE_APP_ID</key><string>1:123:ios:abc</string><key>BUNDLE_ID</key><string>pe.app</string></dict>`;
+  const ios = scanSource(plist, 'ios/Runner/GoogleService-Info.plist');
+  assert(
+    ids(ios) === 'firebase_ios_api_key' && /bundle ID/.test(ios[0]?.why ?? ''),
+    "iOS's GoogleService-Info.plist key is named as iOS, restricted by bundle ID",
+  );
+  const plistDir = mkdtempSync(join(tmpdir(), 'vw-plist-'));
+  mkdirSync(join(plistDir, 'ios'));
+  writeFileSync(join(plistDir, 'ios', 'GoogleService-Info.plist'), plist);
+  assert(
+    scanFolder(plistDir, null).findings.some((f) => f.id === 'firebase_ios_api_key'),
+    'a folder scan reads .plist files, where the iOS key lives',
+  );
+  rmSync(plistDir, { recursive: true, force: true });
 
   // A real repository: what git ignores is not read, except a .env, which is judged as local.
   const repo = mkdtempSync(join(tmpdir(), 'vw-repo-'));
@@ -3447,6 +3487,93 @@ console.log('\n46. --history — a deleted key is still in the commit that added
   const notRepo = mkdtempSync(join(tmpdir(), 'vw-norepo-'));
   assert(scanHistory(notRepo) === null, 'outside a repository there is no history to read');
   rmSync(notRepo, { recursive: true, force: true });
+}
+
+console.log('\n47. Pending items that point at the right files');
+{
+  const sig = emptySignals();
+  // HTML: escaped values and a no-input builder are handled; a raw prop is not.
+  collectSignals(
+    sig,
+    'apps/mcp/src/auth.ts',
+    'const page = `<p>${escapeHtml(name)}</p>`; el.innerHTML = page;',
+  );
+  collectSignals(
+    sig,
+    'app/layout.tsx',
+    '<script dangerouslySetInnerHTML={{ __html: buildAccentBootstrapScript() }} />',
+  );
+  collectSignals(sig, 'app/post.tsx', '<div dangerouslySetInnerHTML={{ __html: post.body }} />');
+  assert(
+    [...sig.htmlSinks].join(',') === 'app/post.tsx',
+    'only the sink with a raw value is listed',
+  );
+
+  // SSRF: a fetch inside the HTML a server sends to the browser is browser code.
+  const ssrf = emptySignals();
+  collectSignals(
+    ssrf,
+    'apps/mcp/src/auth.ts',
+    "app.get('/authorize', (req, res) => res.send(`<script>fetch(${JSON.stringify(callback)})</script>`));",
+  );
+  collectSignals(
+    ssrf,
+    'apps/api/src/routes/proxy.ts',
+    "app.post('/proxy', async (req) => { const { url } = req.body; return fetch(url); });",
+  );
+  assert(
+    [...ssrf.dynamicFetch].join(',') === 'apps/api/src/routes/proxy.ts',
+    'a fetch in a template sent to the browser is not an SSRF lead; one on the request body is',
+  );
+
+  // Ownership: routes that take an id come first, the cut is said, MCP tools count.
+  const own = emptySignals();
+  for (const name of [
+    'app',
+    'auth',
+    'billing',
+    'calendar',
+    'categories',
+    'alerts',
+    'accounts',
+    'budgets',
+    'dashboard',
+    'export',
+  ]) {
+    collectSignals(own, `apps/api/src/routes/${name}.ts`, `router.get('/${name}', handler);`);
+  }
+  collectSignals(
+    own,
+    'apps/api/src/routes/shared-cards.ts',
+    "router.post('/shared-cards/:cardId/expenses', handler);",
+  );
+  collectSignals(
+    own,
+    'apps/api/src/routes/transactions.ts',
+    "router.get('/transactions/:id', (req) => db.tx(req.params.id));",
+  );
+  collectSignals(
+    own,
+    'apps/api/src/llm/tools/register.ts',
+    "server.tool('get_transactions', schema, handler);",
+  );
+  const items = buildPending({ scanned: [], signals: own });
+  const routes = items.find((i) => i.id === 'review_server_ownership')!;
+  assert(
+    routes.files[0] === 'apps/api/src/routes/shared-cards.ts' &&
+      routes.files[1] === 'apps/api/src/routes/transactions.ts',
+    'routes that take an id from the request are listed first',
+  );
+  assert(
+    own.serverEntry.has('apps/api/src/llm/tools/register.ts'),
+    'MCP tools are entry points too',
+  );
+  assert(routes.total === 13 && routes.files.length === 8, 'the list says how many there were');
+  assert(
+    /and 5 more/.test(pendingMarkdown([], items, 'en')) &&
+      /y 5 más/.test(pendingMarkdown([], items, 'es')),
+    'and the report says "and N more", in both languages',
+  );
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

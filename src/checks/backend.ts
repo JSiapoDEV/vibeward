@@ -13,9 +13,6 @@ const MUTATION =
 const AUTH_GUARD =
   /require(User|Role|Auth|Admin|Session)|getServerSession|\bgetSession\b|\bauth\s*\(\)|currentUser|verifySession|\bgetUser\s*\(|assertAuth|checkAuth|authorize|isAuthenticated|ensureUser/i;
 
-const SPREADSHEET = /exceljs|\bxlsx\b|sheetjs|csv-stringify|papaparse|json2csv/i;
-const SHEET_WRITE =
-  /\.addRow\s*\(|\.addRows\s*\(|aoa_to_sheet|json_to_sheet|writeBuffer|stringify\s*\(/;
 const FORMULA_SANITIZED = /formula|\\t|\bsanitiz|['"`]'\s*\+|replace\(\s*\/\^\[=/i;
 
 /** Next.js config that ships no security headers → clickjacking + no XSS defense-in-depth. */
@@ -61,7 +58,7 @@ export function checkServerActionAuth(path: string, content: string): Finding | 
     es: {
       label: 'Una server action o ruta modifica datos sin comprobación de autorización detectable',
       evidence:
-        'Aquí se ejecuta un create/update/delete, pero no se encontró ninguna guarda de autorización (requireUser/getServerSession/auth…) en el fichero.',
+        'Aquí se ejecuta un create/update/delete, pero no se encontró ninguna guarda de autorización (requireUser/getServerSession/auth…) en el archivo.',
       exploit:
         'Si la mutación es alcanzable sin una comprobación de autorización en el servidor, cualquier visitante puede dispararla — la comprobación en middleware o por cookie no basta (puede ser optimista o esquivable).',
       why: 'Toda server action y todo route handler que escriba datos tiene que verificar en el servidor la identidad y el rol de quien llama. Comprueba que este proteja la mutación (o que sea público a propósito).',
@@ -80,30 +77,45 @@ export function checkServerActionAuth(path: string, content: string): Finding | 
   };
 }
 
-/** A spreadsheet/CSV export that writes user data without neutralizing formula prefixes. */
+/**
+ * CSV writers: a library, or the hand-rolled escaper every project ends up writing — the one
+ * that doubles quotes. That doubling is the signature: it is CSV quoting, and quoting is not
+ * formula neutralisation.
+ *
+ * Spreadsheet libraries (exceljs, SheetJS) are not on this list. A string written to a cell is
+ * stored as text there, never evaluated; it was flagged, and it sent people to fix the export
+ * that was already safe.
+ */
+const CSV_LIBRARY = /csv-stringify|papaparse|\bunparse\s*\(|json2csv|fast-csv|@fast-csv/i;
+const CSV_QUOTE_DOUBLING =
+  /\.replace(?:All)?\(\s*(?:\/"\/g|['"`]"['"`])\s*,\s*(?:'""'|`""`|"\\"\\"")\s*\)/;
+
+/** A CSV export that writes user text without neutralising formula prefixes. */
 export function checkExportFormulaInjection(path: string, content: string): Finding | null {
-  if (!SPREADSHEET.test(content) || !SHEET_WRITE.test(content)) return null;
+  const writer = CSV_QUOTE_DOUBLING.exec(content) ?? CSV_LIBRARY.exec(content);
+  if (!writer) return null;
   if (FORMULA_SANITIZED.test(content)) return null;
+  const line = content.slice(0, writer.index).split('\n').length;
   return {
     id: `formula_injection_${path.replace(/[^A-Za-z0-9]/g, '_')}`,
     es: {
-      label: 'La exportación a hoja de cálculo/CSV puede permitir inyección de fórmulas',
+      label: 'La exportación a CSV puede permitir inyección de fórmulas',
       evidence:
-        'Se escriben campos controlados por el usuario en una hoja de cálculo o CSV sin sanear el prefijo de fórmula.',
+        'Las celdas se citan (comas y comillas) pero nada neutraliza una celda de texto que empieza por `=`, `+`, `-` o `@`.',
       exploit:
-        'Un usuario guarda `=HYPERLINK(...)` o `=cmd|...` en un campo de texto; cuando alguien abre el fichero exportado, la hoja de cálculo lo ejecuta como fórmula (exfiltración de datos / DDE).',
-      why: 'Antepón una comilla simple a cualquier valor de celda que empiece por `= + - @` (o por tabulador o retorno de carro) antes de escribirlo.',
+        'Alguien guarda `=HYPERLINK(...)` en un campo de texto; quien abra el CSV en Excel o Google Sheets ve una fórmula que se ejecuta. Si otra persona puede escribir datos que terminan en tu exportación, el ataque es contra ti.',
+      why: 'Neutraliza solo las celdas de texto: si un texto empieza por `=`, `+`, `-`, `@`, tabulador o retorno de carro, antepón una comilla simple. Deja los números como números: anteponerla a un monto negativo lo convierte en texto. Si también exportas a .xlsx con exceljs, esa parte ya guarda el texto como texto.',
     },
-    label: 'Spreadsheet/CSV export may allow formula injection',
+    label: 'CSV export may allow formula injection',
     severity: 'medium',
     check: 16,
     cwe: 'CWE-1236',
-    source: path,
+    source: `${path}:${line}`,
     evidence:
-      'User-controlled fields are written to a spreadsheet/CSV with no formula-prefix sanitization.',
+      'Cells are quoted (commas and quotes) but nothing neutralises a text cell that starts with `=`, `+`, `-` or `@`.',
     exploit:
-      'A user stores `=HYPERLINK(...)` / `=cmd|...` in a text field; when someone opens the exported file, the spreadsheet runs it as a formula (data exfiltration / DDE).',
-    why: 'Prefix any cell value starting with `= + - @` (or a tab/CR) with a single quote before writing it.',
+      'Someone stores `=HYPERLINK(...)` in a text field; whoever opens the CSV in Excel or Google Sheets gets a formula that runs. If another person can write data that ends up in your export, the attack is on you.',
+    why: 'Neutralise text cells only: when a string starts with `=`, `+`, `-`, `@`, a tab or a carriage return, put a single quote in front. Leave numbers as numbers — prefixing a negative amount turns it into text. An .xlsx written with exceljs already stores text as text.',
     references: [
       'https://cwe.mitre.org/data/definitions/1236.html',
       'https://owasp.org/www-community/attacks/CSV_Injection',
