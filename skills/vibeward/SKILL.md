@@ -15,10 +15,11 @@ the only thing allowed to say so. If it is not in the report, it is not a findin
 detector, not a repair tool, and so are you while you are using it. A scan that ends in a
 report the user understands is a complete success — not a step on the way to one.
 
-**You do not fix anything you find here.** Not the security findings, not the website ones,
-not the one-line mechanical ones, and not when the user asks you to as a follow-up. If they
-want changes made, that is a new task they start deliberately, with the report in hand — not
-something that happens automatically because a scan produced a list. Findings ship without a
+**You do not fix anything on your own initiative.** Not the security findings, not the website
+ones, not the one-line mechanical ones. A scan ends in a report, not in edits nobody asked for.
+If the user then asks you to fix a specific finding, that is their decision about their own
+code: do it as a separate task, show what you changed, and say what the change does not undo
+(see §5). Findings ship without a
 `fix` field and without an `autofix` field on purpose: there is no work order here to carry
 out, only a `why` written for a person to read.
 
@@ -59,8 +60,8 @@ only after they confirm.
 
 Reports go under `.vibeward/reports/`, which ignores itself in git, so a `git add .` cannot
 pick them up. Keep them there: a report names where the app is exposed, and in a public
-repository it is a map. Never pass `--out` to a path git tracks, and never commit a report,
-even if asked to "add everything" — say why instead.
+repository it is a map. Never pass `--out` to a path git tracks, and never commit a report on
+your own. If the user explicitly asks to commit one, tell them first what it exposes.
 
 ### Exit codes
 
@@ -181,12 +182,14 @@ and has no agent of their own. Offer it when that is the case.
 
 ## 5. Split by kind
 
-**`kind: "security"`** (or no `kind` at all) — **do not fix these, ever, even if asked.**
-Report them and stop there. A security finding usually means something is already exposed,
-such as a service key sitting in a bundle or a table readable without authentication.
-Deleting the line does not un-leak the key — it has to be rotated, and only the owner
-decides when, how, and whether the incident has to be disclosed. Quietly patching it hides
-an incident. Tell the user what to rotate and in what order, and let them do it.
+**`kind: "security"`** (or no `kind` at all) — **do not fix these on your own.** Report them
+first. A security finding usually means something is already exposed, such as a service key
+sitting in a bundle or a table readable without authentication. Deleting the line does not
+un-leak the key — it has to be rotated, and only the owner decides when, how, and whether the
+incident has to be disclosed. Quietly patching it hides an incident. Tell the user what to
+rotate and in what order. If they ask you to make the change, make it, and say in the same
+message what it does not undo: the key still has to be rotated at the provider, and rows that
+were readable have to be treated as read.
 
 **`kind: "web"`** — quality and visibility. Report these the same way. They are not a
 lesser category you are allowed to go and fix; they are the category that is not urgent.
@@ -224,8 +227,8 @@ to a scanner reading a URL.
 - Never say something is missing, or fixed, because you read the HTML yourself. Run the
   scan and quote its `evidence`.
 - Never report a scan that failed as a scan that found nothing.
-- **Never fix a finding.** Not security, not web, not the one-line ones, not on request.
-  Report it and let the user decide what to do with their own site.
+- **Never fix a finding on your own initiative.** Report it and let the user decide. When they
+  ask for a specific fix, do it, and say what it does not undo.
 - Never edit a file, open a PR or deploy as part of an audit. The only file you may write
   is `vibeward.json`, and only to record a suppression the user asked for.
 - Never invent a claim about the business to fill a gap the report describes.

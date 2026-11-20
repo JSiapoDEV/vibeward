@@ -27,6 +27,11 @@ export interface RenderContext {
   moments: import('../guard/verdict.js').Moment[];
   /** A level was picked in this run (and, unless `medium`, is already in `guardCommand`). */
   levelChosen?: boolean;
+  /**
+   * Whether the project uses Supabase: true or false for a project install, undefined for a
+   * user-level one, which serves every repository. Decides whether the always-on rules name it.
+   */
+  supabase?: boolean;
 }
 
 const TITLE = '# vibeward — audit a deployed site and report what it finds';
@@ -57,10 +62,11 @@ export const INSTRUCTION = [
   'detector, not a repair tool, and so are you while you are using it. A scan that ends in a',
   'report the user understands is a complete success — not a step on the way to one.',
   '',
-  '**You do not fix anything you find here.** Not the security findings, not the website ones,',
-  'not the one-line mechanical ones, and not when the user asks you to as a follow-up. If they',
-  'want changes made, that is a new task they start deliberately, with the report in hand — not',
-  'something that happens automatically because a scan produced a list. Findings ship without a',
+  '**You do not fix anything on your own initiative.** Not the security findings, not the website',
+  'ones, not the one-line mechanical ones. A scan ends in a report, not in edits nobody asked for.',
+  'If the user then asks you to fix a specific finding, that is their decision about their own',
+  'code: do it as a separate task, show what you changed, and say what the change does not undo',
+  '(see §5). Findings ship without a',
   '`fix` field and without an `autofix` field on purpose: there is no work order here to carry',
   'out, only a `why` written for a person to read.',
   '',
@@ -101,8 +107,8 @@ export const INSTRUCTION = [
   '',
   'Reports go under `.vibeward/reports/`, which ignores itself in git, so a `git add .` cannot',
   'pick them up. Keep them there: a report names where the app is exposed, and in a public',
-  'repository it is a map. Never pass `--out` to a path git tracks, and never commit a report,',
-  'even if asked to "add everything" — say why instead.',
+  'repository it is a map. Never pass `--out` to a path git tracks, and never commit a report on',
+  'your own. If the user explicitly asks to commit one, tell them first what it exposes.',
   '',
   '### Exit codes',
   '',
@@ -223,12 +229,14 @@ export const INSTRUCTION = [
   '',
   '## 5. Split by kind',
   '',
-  '**`kind: "security"`** (or no `kind` at all) — **do not fix these, ever, even if asked.**',
-  'Report them and stop there. A security finding usually means something is already exposed,',
-  'such as a service key sitting in a bundle or a table readable without authentication.',
-  'Deleting the line does not un-leak the key — it has to be rotated, and only the owner',
-  'decides when, how, and whether the incident has to be disclosed. Quietly patching it hides',
-  'an incident. Tell the user what to rotate and in what order, and let them do it.',
+  '**`kind: "security"`** (or no `kind` at all) — **do not fix these on your own.** Report them',
+  'first. A security finding usually means something is already exposed, such as a service key',
+  'sitting in a bundle or a table readable without authentication. Deleting the line does not',
+  'un-leak the key — it has to be rotated, and only the owner decides when, how, and whether the',
+  'incident has to be disclosed. Quietly patching it hides an incident. Tell the user what to',
+  'rotate and in what order. If they ask you to make the change, make it, and say in the same',
+  'message what it does not undo: the key still has to be rotated at the provider, and rows that',
+  'were readable have to be treated as read.',
   '',
   '**`kind: "web"`** — quality and visibility. Report these the same way. They are not a',
   'lesser category you are allowed to go and fix; they are the category that is not urgent.',
@@ -266,8 +274,8 @@ export const INSTRUCTION = [
   '- Never say something is missing, or fixed, because you read the HTML yourself. Run the',
   '  scan and quote its `evidence`.',
   '- Never report a scan that failed as a scan that found nothing.',
-  '- **Never fix a finding.** Not security, not web, not the one-line ones, not on request.',
-  '  Report it and let the user decide what to do with their own site.',
+  '- **Never fix a finding on your own initiative.** Report it and let the user decide. When they',
+  '  ask for a specific fix, do it, and say what it does not undo.',
   '- Never edit a file, open a PR or deploy as part of an audit. The only file you may write',
   '  is `vibeward.json`, and only to record a suppression the user asked for.',
   '- Never invent a claim about the business to fill a gap the report describes.',
@@ -411,8 +419,8 @@ function installBody(): string {
  * avoid, and the version that drifts is always the copy.
  */
 const NEVER_FIXES =
-  'vibeward detects and reports. It does not fix anything it finds, and neither do you while ' +
-  'you are using it — see the `vibeward` skill before acting on a report.';
+  'vibeward detects and reports. It does not fix anything it finds, and you do not fix anything ' +
+  'either unless the user asks you to — see the `vibeward` skill before acting on a report.';
 
 /**
  * `ci-security-scanning-with-vibeward` — the body for the pipeline ask.
@@ -605,46 +613,60 @@ export function skillFile(spec: SkillSpec = SKILLS[0]!): string {
  * These are the risks the `guard` hook matches on a user's prompt, restated for the agent's
  * own decisions. The hook catches the request; this catches the improvisation.
  */
-const ALWAYS_ON = [
-  '## Security rules',
-  '',
-  'These hold in every conversation in this repo, with or without a scan.',
-  '',
-  '- **Never disable, weaken or work around a security control to make something pass** —',
-  '  Row-Level Security, an auth check, CSRF, a rate limit, signature or certificate',
-  '  verification. A control that rejects your request is usually catching a real bug. Fix',
-  '  the policy, not the guard.',
-  '- **Never put a `service_role` / `sb_secret` / admin key where a browser can reach it.**',
-  '  Client code gets the anon (publishable) key plus RLS; privileged work goes server-side,',
-  '  in an Edge Function or a backend route.',
-  '- **Never make a table or a storage bucket public to debug.** Use an authenticated test',
-  '  user and a real policy. "Temporarily" is how it ships.',
-  '- **Never commit `.env`, and never log the value of a secret.** The name is fine, the',
-  '  value is not, and git history keeps it after you delete the line.',
-  '- **Never widen CORS to `*` on an authenticated API.** Whitelist the exact domains.',
-  '- **Validate an uploaded file by its content, on the server.** Read its first bytes (magic',
-  '  bytes) and match them against an allowlist. The extension, the `accept` attribute and the',
-  '  declared MIME type are chosen by the sender — a hint for the UI, never the check.',
-  '',
-  'If a leak has already happened, **say so and stop.** Deleting the line does not un-leak the',
-  'key — it has to be rotated, and only the owner decides when, how, and whether the incident',
-  'has to be disclosed. Report it; quietly patching it hides an incident from the person who',
-  'is accountable for it.',
-  '',
-  'To audit a deployed URL, use the vibeward skill, or run',
-  '`npx vibeward@latest <url> --passive --json --stdout --out .vibeward/reports/vibeward-report.md --yes`.',
-].join('\n');
+function alwaysOn(supabase: boolean | undefined): string {
+  // Supabase is named only where it is used. `undefined` is a user-level file that serves
+  // every repository, so it keeps the Supabase lines, phrased as "if".
+  const supabaseRules =
+    supabase === false
+      ? []
+      : [
+          `- **${supabase ? 'Supabase' : 'If the project uses Supabase'}:** keep Row-Level Security on in every`,
+          '  table the API exposes, and write policies that check whose row it is',
+          '  (`auth.uid() = user_id`), not only that someone is signed in. Client code gets the anon',
+          '  (publishable) key; a `service_role` / `sb_secret` key only ever runs server-side.',
+        ];
+  return [
+    '## Security rules',
+    '',
+    'These hold in every conversation in this repo, with or without a scan.',
+    '',
+    '- **Never disable, weaken or work around a security control to make something pass** —',
+    '  an auth check, an access policy, CSRF, a rate limit, signature or certificate',
+    '  verification. A control that rejects your request is usually catching a real bug. Fix',
+    '  the policy, not the guard.',
+    '- **Never put a secret where a browser can reach it** — a payment or AI provider key, a',
+    '  database password, an admin token. Client code gets only keys built to be public;',
+    '  privileged work goes server-side.',
+    '- **Never make a table, a storage bucket or an endpoint public to debug.** Use an',
+    '  authenticated test user and a real rule. "Temporarily" is how it ships.',
+    '- **Never commit `.env`, and never log the value of a secret.** The name is fine, the',
+    '  value is not, and git history keeps it after you delete the line.',
+    '- **Never widen CORS to `*` on an authenticated API.** Whitelist the exact domains.',
+    '- **Validate an uploaded file by its content, on the server.** Read its first bytes (magic',
+    '  bytes) and match them against an allowlist. The extension, the `accept` attribute and the',
+    '  declared MIME type are chosen by the sender — a hint for the UI, never the check.',
+    ...supabaseRules,
+    '',
+    'If a leak has already happened, **say so before anything else.** Deleting the line does not',
+    'un-leak the key — it has to be rotated, and only the owner decides when, how, and whether',
+    'the incident has to be disclosed. Do not quietly patch it; if the user asks you to fix it,',
+    'do, and remind them that the key still has to be rotated.',
+    '',
+    'To audit a deployed URL, use the vibeward skill, or run',
+    '`npx vibeward@latest <url> --passive --json --stdout --out .vibeward/reports/vibeward-report.md --yes`.',
+  ].join('\n');
+}
 
 /**
  * The block merged into `CLAUDE.md`. Deliberately the short always-on rules and not the
- * audit procedure: see the note on ALWAYS_ON.
+ * audit procedure: see the note on alwaysOn.
  */
-export function claudeMdBlock(): string {
+export function claudeMdBlock(ctx?: Pick<RenderContext, 'supabase'>): string {
   return [
     MARKER_START,
     `<!-- ${MARK} — regenerate with \`npx vibeward@latest init\` -->`,
     '',
-    ALWAYS_ON,
+    alwaysOn(ctx?.supabase),
     MARKER_END,
   ].join('\n');
 }

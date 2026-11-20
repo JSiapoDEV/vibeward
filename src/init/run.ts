@@ -7,9 +7,16 @@
 // It also explains rather than just installing. Six hosts enforce different amounts of this —
 // one cannot gate a prompt at all, two can only block where others can warn — and a user
 // choosing between them has to be able to see that before they rely on it, not after.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { DEFAULT_GUARD_LEVEL, isGuardLevel } from '../guard/verdict.js';
 import type { GuardLevel, Moment } from '../guard/verdict.js';
 import type { Choice } from '../core/prompt.js';
@@ -427,6 +434,32 @@ async function askLevel(): Promise<GuardLevel | null> {
   return isGuardLevel(picked) ? picked : null;
 }
 
+/**
+ * Whether a project uses Supabase, from what is on disk: a `supabase/` folder, or the client
+ * library in the root `package.json` or in a workspace package one level down (`apps/*`,
+ * `packages/*`). Cheap on purpose — this decides a paragraph, not a security verdict.
+ */
+export function usesSupabase(cwd: string): boolean {
+  if (existsSync(join(cwd, 'supabase'))) return true;
+  const manifests = [join(cwd, 'package.json')];
+  for (const group of ['apps', 'packages']) {
+    try {
+      for (const name of readdirSync(join(cwd, group))) {
+        manifests.push(join(cwd, group, name, 'package.json'));
+      }
+    } catch {
+      // No such folder.
+    }
+  }
+  return manifests.some((file) => {
+    try {
+      return readFileSync(file, 'utf8').includes('@supabase/');
+    } catch {
+      return false;
+    }
+  });
+}
+
 function resolveTargets(ids: string[], scope: Scope): Target[] {
   const chosen: Target[] = [];
   for (const id of ids) {
@@ -590,6 +623,9 @@ export async function runInit(opts: InitOptions): Promise<never> {
   }
 
   const ctx = resolveGuardContext(guarded, scope, moments);
+  // The always-on rules name Supabase only in a project that uses it. A user-level install
+  // serves every repository, so it stays undefined and the rules say "if".
+  if (scope === 'project') ctx.supabase = usesSupabase(cwd);
   if (guarded && level) {
     ctx.levelChosen = true;
     // `medium` is the default, so it is left off the command: a project that later sets

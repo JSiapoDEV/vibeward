@@ -15,7 +15,7 @@ English, Spanish or Portuguese, with why it is dangerous and what to do instead,
 the agent acts. The rules are deterministic with no LLM call anywhere, so they cannot be
 prompt-injected away.
 
-vibeward detects and reports. It does not fix anything it finds, and neither do you while you are using it — see the `vibeward` skill before acting on a report.
+vibeward detects and reports. It does not fix anything it finds, and you do not fix anything either unless the user asks you to — see the `vibeward` skill before acting on a report.
 
 ## 1. The installer asks questions, and you are not the one to answer them
 

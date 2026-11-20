@@ -60,7 +60,8 @@ refactor. A test does."_
 
 - **It never fixes.** No finding carries a `fix` or an `autofix` field. `src/core/types.ts:43`
   says so in the type, `test/contract-test.ts` asserts it over every finding a full sweep
-  produces, and the installed skill text is asserted to forbid an agent from repairing anything.
+  produces, and the installed skill text is asserted to forbid an agent from repairing anything
+  on its own initiative. A fix the user explicitly asks for is theirs to ask for.
 - **Security findings cannot be silenced by configuration.** `vibeward.json` may suppress only
   `kind: "web"` ids; `test/contract-test.ts` asserts that a forged security suppression still
   leaves the finding in the report.

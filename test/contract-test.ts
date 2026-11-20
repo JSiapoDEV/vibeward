@@ -325,6 +325,33 @@ console.log('\nContract — the installed instructions say so\n');
     forbids.every((p) => p.test(INSTRUCTION)),
     'the skill body forbids fixing in as many words',
   );
+  // On its own initiative — not over the owner. An instruction that told a developer's agent to
+  // refuse the developer's own request put vibeward above the person whose repository it is.
+  assert(
+    /on your own initiative/i.test(INSTRUCTION) &&
+      /If the user then asks you to fix/.test(INSTRUCTION),
+    'the skill lets the user ask for a fix, and only forbids fixing unasked',
+  );
+  assert(
+    !/even if asked|not when the user asks you to|not on request/i.test(INSTRUCTION),
+    'no installed instruction tells the agent to refuse the user',
+  );
+  assert(
+    /what it does not undo|still has to be rotated/i.test(INSTRUCTION),
+    'a requested fix comes with what it does not undo',
+  );
+  const noSupabase = claudeMdBlock({ supabase: false });
+  const withSupabase = claudeMdBlock({ supabase: true });
+  const unknown = claudeMdBlock();
+  assert(
+    !/supabase|service_role|sb_secret/i.test(noSupabase),
+    'CLAUDE.md rules do not mention Supabase in a project without it',
+  );
+  assert(/\*\*Supabase:\*\*/.test(withSupabase), 'and name it plainly in a project that uses it');
+  assert(
+    /If the project uses Supabase/.test(unknown),
+    'a user-level file, which serves every repository, says "if"',
+  );
   assert(
     !/\bautofix\b/.test(
       INSTRUCTION.replace(/There is no `fix` and no `autofix`[^\n]*/g, '').replace(

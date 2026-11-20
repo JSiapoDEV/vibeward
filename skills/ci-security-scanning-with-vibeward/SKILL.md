@@ -11,7 +11,7 @@ One npx command, no API key, no Docker, no LLM call and no runtime dependencies,
 runs on a bare runner in seconds. Findings fail the build on critical severity and land in
 the GitHub Security tab as SARIF.
 
-vibeward detects and reports. It does not fix anything it finds, and neither do you while you are using it — see the `vibeward` skill before acting on a report.
+vibeward detects and reports. It does not fix anything it finds, and you do not fix anything either unless the user asks you to — see the `vibeward` skill before acting on a report.
 
 ## 1. GitHub Actions
 

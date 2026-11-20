@@ -488,12 +488,15 @@ answering yes/no never does. So the scanner decides what is true, and the skill'
 that into something a human can act on — leading with what it costs, quoting the evidence
 verbatim, and never restating a severity in its own words.
 
-What the skill explicitly forbids is the agent going on to fix any of it. That is not a
-limitation to be worked around, it is the point: an audit that ends in a pile of unrequested
-diffs replaces the thing you can act on with a thing you now have to review. And on the security
-side it is worse than untidy — deleting an exposed key from a bundle does not un-leak it. The key
-has to be rotated, and only the owner decides when, and whether the incident has to be disclosed.
-Quietly patching it hides an incident from the person accountable for it.
+What the skill forbids is the agent going on to fix any of it on its own. An audit that ends in a
+pile of unrequested diffs replaces the thing you can act on with a thing you now have to review.
+And on the security side it is worse than untidy — deleting an exposed key from a bundle does not
+un-leak it. The key has to be rotated, and only the owner decides when, and whether the incident
+has to be disclosed. Quietly patching it hides an incident from the person accountable for it.
+
+Asking is different. If you tell your agent to fix a specific finding, that is your decision about
+your own code, and it will — saying in the same message what the change does not undo: the key
+still has to be rotated, and rows that were readable have to be treated as read.
 
 > One gotcha worth knowing: **Claude Code reads `CLAUDE.md`, not `AGENTS.md`.** If you install only
 > the AGENTS.md target, add `@AGENTS.md` as the first line of your `CLAUDE.md` — or just install the
