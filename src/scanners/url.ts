@@ -11,7 +11,14 @@ import { contrastTrustCenter, parseTrustCenter, type TrustCenter } from '../chec
 import { checkWeb, parsePage, fingerprintStack, webChecksNotEvaluated } from '../checks/web.js';
 import type { StackFingerprint } from '../checks/web.js';
 import { readConsoleErrors } from '../checks/console.js';
-import { probeRLS, rlsFindings, checkGraphqlIntrospection } from '../checks/supabase.js';
+import {
+  probeRLS,
+  rlsFindings,
+  checkGraphqlIntrospection,
+  fetchAuthSettings,
+  authSettingsFindings,
+  rpcFindings,
+} from '../checks/supabase.js';
 import type { RlsResult } from '../checks/supabase.js';
 import { extractFirebaseConfig, checkFirebase, firebaseTarget } from '../checks/firebase.js';
 import { hasFileInput } from '../checks/uploads.js';
@@ -322,6 +329,7 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
   const supabaseSkipped = (en: string, es: string): void => {
     cov.notEvaluated(AREA.supabaseRls, en, es);
     cov.notEvaluated(AREA.supabaseGraphql, en, es);
+    cov.notEvaluated(AREA.supabaseAuth, en, es);
   };
 
   let rls: RlsResult | null = null;
@@ -336,6 +344,11 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
     );
     cov.notApplicable(
       AREA.supabaseGraphql,
+      'no Supabase project URL and public key were found in the served assets',
+      'no se encontró una URL de proyecto de Supabase con clave pública en los recursos servidos',
+    );
+    cov.notApplicable(
+      AREA.supabaseAuth,
       'no Supabase project URL and public key were found in the served assets',
       'no se encontró una URL de proyecto de Supabase con clave pública en los recursos servidos',
     );
@@ -379,6 +392,27 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
       );
     }
     findings.push(...rlsFindings(rls));
+    findings.push(...rpcFindings(rls.rpcs ?? [], supabaseCfg!.projectUrl));
+
+    // Who can become `authenticated`. Behind the same consent as the table reads: it is a
+    // request to the backend, even though the answer is public by design.
+    write(`${C.gray}▸ Reading the sign-up settings…${C.reset}`);
+    const auth = await fetchAuthSettings(supabaseCfg!.projectUrl, supabaseCfg!.anonKey!);
+    log(auth ? ` ${C.green}done${C.reset}` : ` ${C.yellow}not served${C.reset}`);
+    if (auth) {
+      findings.push(...authSettingsFindings(auth, supabaseCfg!.projectUrl));
+      cov.checked(
+        AREA.supabaseAuth,
+        'Supabase sign-up settings — open sign-ups, unverified sign-ups, anonymous sign-ins',
+        'Configuración de registro de Supabase — registro abierto, registros sin verificar, inicios anónimos',
+      );
+    } else {
+      cov.notEvaluated(
+        AREA.supabaseAuth,
+        'the project did not answer /auth/v1/settings, so who can sign up was not read',
+        'el proyecto no respondió /auth/v1/settings, así que no se leyó quién puede registrarse',
+      );
+    }
 
     write(`${C.gray}▸ Checking GraphQL introspection…${C.reset}`);
     const gql = await checkGraphqlIntrospection(supabaseCfg!.projectUrl, supabaseCfg!.anonKey!);
@@ -453,6 +487,7 @@ export async function runUrlScan(rawTarget: string, args: Args): Promise<never> 
   const scanned = cov.entries();
   const pending = buildPending({
     scanned,
+    rpcs: rls?.rpcs ?? [],
     // From the address itself: the website pass that builds `fingerprint` may not have run.
     // A Trust center is Lovable's alone, so it also names the builder on a custom domain.
     builder:

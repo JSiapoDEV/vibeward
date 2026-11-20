@@ -63,6 +63,8 @@ export const AREA = {
   supabaseRls: 'supabase_rls',
   /** Whether the live Supabase project answers GraphQL introspection. */
   supabaseGraphql: 'supabase_graphql',
+  /** Who can get a session on the live project: sign-ups, auto-confirm, anonymous sign-ins. */
+  supabaseAuth: 'supabase_auth',
   /** Firebase Realtime Database and Storage bucket rules, probed live. */
   firebaseRules: 'firebase_rules',
   /** A Supabase audit export folded in from `--supabase`. */

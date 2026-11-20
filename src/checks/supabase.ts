@@ -38,6 +38,12 @@ export interface RlsResult {
   writable: TableResult[];
   dataSecrets: Finding[];
   allResults: TableResult[];
+  /**
+   * Database functions the public key may call, read from the same OpenAPI document as the
+   * tables. PostgREST lists only what the requesting role can execute, so this is the list of
+   * functions anyone on the internet can run. Absent on an export or an older caller.
+   */
+  rpcs?: string[];
 }
 
 const COMMON_TABLES = [
@@ -161,12 +167,32 @@ export function parseOpenApiTables(body: string): string[] {
   return [...names];
 }
 
-/** Enumerates the tables the anon key can see via the PostgREST OpenAPI root. */
-async function enumerateTables(
+/**
+ * The functions in the same document: `/rpc/<name>` paths. PostgREST builds the document for
+ * the role that asked, so with the public key these are the functions any visitor can call.
+ * Pure — no network.
+ */
+export function parseOpenApiRpcs(body: string): string[] {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(body);
+  } catch {
+    return [];
+  }
+  const paths = asRecord(asRecord(doc)?.paths);
+  if (!paths) return [];
+  return Object.keys(paths)
+    .map((p) => /^\/rpc\/([^/]+)$/.exec(p)?.[1])
+    .filter((n): n is string => Boolean(n))
+    .sort();
+}
+
+/** Enumerates the tables and functions the anon key can see via the PostgREST OpenAPI root. */
+async function enumerateApi(
   projectUrl: string,
   key: string,
   timeout: number,
-): Promise<string[]> {
+): Promise<{ tables: string[]; rpcs: string[] }> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeout);
   try {
@@ -174,10 +200,11 @@ async function enumerateTables(
       headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: 'application/json' },
       signal: controller.signal,
     });
-    if (!res.ok) return [];
-    return parseOpenApiTables(await res.text());
+    if (!res.ok) return { tables: [], rpcs: [] };
+    const body = await res.text();
+    return { tables: parseOpenApiTables(body), rpcs: parseOpenApiRpcs(body) };
   } catch {
-    return [];
+    return { tables: [], rpcs: [] };
   } finally {
     clearTimeout(t);
   }
@@ -287,7 +314,8 @@ export async function probeRLS(
 ): Promise<RlsResult> {
   // Enumerate live, then union with the common-name fallback so we cover custom tables
   // (the Moltbook failure: `agents`, `submolts`… never appear in a fixed list).
-  const discovered = tables ?? (await enumerateTables(projectUrl, anonKey, timeout));
+  const api = tables ? { tables, rpcs: [] } : await enumerateApi(projectUrl, anonKey, timeout);
+  const discovered = api.tables;
   const enumerated = discovered.length;
   const merged = [...new Set([...discovered, ...COMMON_TABLES])].slice(0, MAX_TABLES);
 
@@ -318,7 +346,172 @@ export async function probeRLS(
     writable,
     dataSecrets,
     allResults: results,
+    rpcs: api.rpcs,
   };
+}
+
+/** A function whose name says it runs the SQL it is given. Splinter 0031, seen from outside. */
+const RUNS_SQL =
+  /^(?:exec(?:ute)?_?(?:sql|query|raw)|run_?(?:sql|query)|raw_?sql|sql(?:_query|_exec)?|query_?sql|eval_?sql|exec)$/i;
+
+/**
+ * Functions any visitor can call whose name says they run arbitrary SQL. Only the name is
+ * known — calling one to find out would be the attack — so the label says "named like", and
+ * the migration rule (`dynamic_sql_*`) is what reads the body when the code is at hand.
+ */
+export function rpcFindings(rpcs: string[], projectUrl: string): Finding[] {
+  return rpcs
+    .filter((name) => RUNS_SQL.test(name))
+    .map((name) => ({
+      id: `rpc_runs_sql_${name}`,
+      label: `Anyone can call \`${name}()\`, a database function named like it runs SQL`,
+      severity: 'high' as const,
+      check: 10,
+      cwe: 'CWE-89',
+      source: `${projectUrl}/rest/v1/rpc/${name}`,
+      evidence: `/rpc/${name} is listed for the public key in the API's OpenAPI document`,
+      exploit:
+        'If it does what its name says, the public key in your app runs any SQL: read every table, drop them, or grant itself more. It was not called to check — that would be the attack.',
+      why:
+        'Revoke EXECUTE from `anon` and `authenticated` (`revoke execute on function public.' +
+        name +
+        ' from anon, authenticated;`), or move it out of the `public` schema. A function that runs whatever text it receives should not be reachable from the browser at all.',
+      references: [
+        'https://supabase.com/docs/guides/database/database-advisors?lint=0031_dynamic_sql_in_function',
+        'https://cwe.mitre.org/data/definitions/89.html',
+      ],
+      es: {
+        label: `Cualquiera puede llamar a \`${name}()\`, una función de la base de datos con nombre de ejecutar SQL`,
+        evidence: `/rpc/${name} aparece para la clave pública en el documento OpenAPI de la API`,
+        exploit:
+          'Si hace lo que dice su nombre, la clave pública de tu app ejecuta cualquier SQL: leer todas las tablas, borrarlas o darse más permisos. No se llamó para comprobarlo: eso sería el ataque.',
+        why:
+          'Quita EXECUTE a `anon` y `authenticated` (`revoke execute on function public.' +
+          name +
+          ' from anon, authenticated;`), o sácala del esquema `public`. Una función que ejecuta el texto que recibe no debería poder llamarse desde el navegador.',
+      },
+    }));
+}
+
+/** What `GET /auth/v1/settings` says about who can get a session. */
+export interface AuthSettings {
+  disableSignup: boolean;
+  mailerAutoconfirm: boolean;
+  phoneAutoconfirm: boolean;
+  anonymousUsers: boolean;
+  email: boolean;
+  phone: boolean;
+}
+
+/**
+ * Parses Supabase Auth's public settings document. The field names are the ones its source
+ * declares (`internal/api/settings.go`); anything that does not carry them is not that
+ * document, and is ignored rather than read as "everything off".
+ */
+export function parseAuthSettings(body: string): AuthSettings | null {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const root = asRecord(doc);
+  const external = asRecord(root?.external);
+  if (!root || !external || typeof root.disable_signup !== 'boolean') return null;
+  return {
+    disableSignup: root.disable_signup,
+    mailerAutoconfirm: root.mailer_autoconfirm === true,
+    phoneAutoconfirm: root.phone_autoconfirm === true,
+    anonymousUsers: external.anonymous_users === true,
+    email: external.email === true,
+    phone: external.phone === true,
+  };
+}
+
+/** Reads the settings with the public key, the way the app's own sign-up form does. */
+export async function fetchAuthSettings(
+  projectUrl: string,
+  key: string,
+  timeout = 10000,
+): Promise<AuthSettings | null> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(`${projectUrl}/auth/v1/settings`, {
+      headers: { apikey: key, Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    return res.ok ? parseAuthSettings(await res.text()) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Who can become `authenticated`. Nothing here is wrong on its own — a public sign-up is how
+ * most apps work — but every policy written `to authenticated using (true)` means exactly as
+ * much as this says. With anonymous sign-ins on, that is everyone, without even an email.
+ */
+export function authSettingsFindings(s: AuthSettings, projectUrl: string): Finding[] {
+  if (s.disableSignup) return [];
+  const findings: Finding[] = [];
+  const source = `${projectUrl}/auth/v1/settings`;
+
+  if (s.anonymousUsers) {
+    findings.push({
+      id: 'supabase_anonymous_signins',
+      label: 'Anonymous sign-ins are on: anyone gets the `authenticated` role without an email',
+      severity: 'medium',
+      check: 7,
+      cwe: 'CWE-287',
+      source,
+      evidence: '"external": { "anonymous_users": true }, "disable_signup": false',
+      exploit:
+        "One call to sign in anonymously returns a session with the `authenticated` role. Every policy that only checks that role — `to authenticated using (true)`, `auth.role() = 'authenticated'` — is open to anyone who makes that call.",
+      why: "If the app needs guests, make every policy that guests must not pass check `(auth.jwt() ->> 'is_anonymous')::boolean is false`, and turn on CAPTCHA for sign-ins. If it does not, turn anonymous sign-ins off in Authentication → Sign In / Providers.",
+      references: ['https://supabase.com/docs/guides/auth/auth-anonymous'],
+      es: {
+        label:
+          'Los inicios de sesión anónimos están activados: cualquiera obtiene el rol `authenticated` sin correo',
+        exploit:
+          "Una sola llamada para iniciar sesión de forma anónima devuelve una sesión con el rol `authenticated`. Toda política que solo mira ese rol (`to authenticated using (true)`, `auth.role() = 'authenticated'`) queda abierta para quien haga esa llamada.",
+        why: "Si la app necesita invitados, haz que cada política que un invitado no deba pasar compruebe `(auth.jwt() ->> 'is_anonymous')::boolean is false`, y activa el CAPTCHA en el inicio de sesión. Si no los necesita, desactiva los inicios anónimos en Authentication → Sign In / Providers.",
+      },
+    });
+  }
+
+  const autoconfirm = (s.email && s.mailerAutoconfirm) || (s.phone && s.phoneAutoconfirm);
+  if (autoconfirm) {
+    const what = s.email && s.mailerAutoconfirm ? 'email' : 'phone';
+    findings.push({
+      id: 'supabase_signup_autoconfirm',
+      label: `Anyone can sign up with an unverified ${what} and is signed in at once`,
+      severity: 'low',
+      check: 7,
+      cwe: 'CWE-287',
+      source,
+      evidence:
+        what === 'email'
+          ? '"mailer_autoconfirm": true, "disable_signup": false'
+          : '"phone_autoconfirm": true, "disable_signup": false',
+      exploit:
+        'Sign-ups are confirmed without proving the address belongs to the person. Anyone can open accounts in bulk, or in someone else’s name, and each one passes every policy that only checks `authenticated`.',
+      why: 'Turn on "Confirm email" in Authentication → Providers → Email (set up your own SMTP if the default emails were the reason it was turned off), and write policies that check whose row it is, not only that someone is signed in.',
+      references: ['https://supabase.com/docs/guides/auth/general-configuration'],
+      es: {
+        label:
+          what === 'email'
+            ? 'Cualquiera puede registrarse con un correo sin verificar y entra de inmediato'
+            : 'Cualquiera puede registrarse con un teléfono sin verificar y entra de inmediato',
+        exploit:
+          'Los registros se confirman sin probar que la dirección sea de la persona. Cualquiera puede abrir cuentas en masa, o a nombre de otro, y cada una pasa toda política que solo mira `authenticated`.',
+        why: 'Activa "Confirm email" en Authentication → Providers → Email (configura tu propio SMTP si lo apagaste porque no llegaban los correos), y escribe políticas que comprueben de quién es la fila, no solo que haya sesión.',
+      },
+    });
+  }
+  return findings;
 }
 
 /** Builds every finding implied by an RLS probe: reads, writes, and secrets-in-data. */

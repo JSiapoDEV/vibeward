@@ -224,18 +224,24 @@ function reviewItems(signals: ReviewSignals): PendingItem[] {
 
 /** What this run did not look at, as tasks. The coverage text already says how to cover it. */
 function uncheckedItems(scanned: CoverageEntry[], ignore: string[]): PendingItem[] {
-  return scanned
-    .filter((e) => e.status === 'not_evaluated' && !ignore.includes(e.id))
-    .map((e) => ({
-      id: `unchecked_${e.id}`,
-      kind: 'unchecked' as const,
-      task: e.detail,
-      why: coverage(
-        'Not checked is not the same as fine: nothing in this report speaks for this area.',
-        'No revisado no es lo mismo que correcto: nada en este informe habla de esta área.',
-      ),
-      files: [],
-    }));
+  return (
+    scanned
+      // The website pass is quality, not security: its gaps belong in the coverage section, not
+      // in a list of security work.
+      .filter(
+        (e) => e.status === 'not_evaluated' && !ignore.includes(e.id) && e.id !== 'website_quality',
+      )
+      .map((e) => ({
+        id: `unchecked_${e.id}`,
+        kind: 'unchecked' as const,
+        task: e.detail,
+        why: coverage(
+          'Not checked is not the same as fine: nothing in this report speaks for this area.',
+          'No revisado no es lo mismo que correcto: nada en este informe habla de esta área.',
+        ),
+        files: [],
+      }))
+  );
 }
 
 export function buildPending(input: {
@@ -248,9 +254,26 @@ export function buildPending(input: {
    * that is a true sentence and a pointless chore.
    */
   ignoreUnchecked?: string[];
+  /** Database functions the public key can call, from a live probe. */
+  rpcs?: string[];
 }): PendingItem[] {
   const items: PendingItem[] = [];
   if (input.signals) items.push(...reviewItems(input.signals));
+  if (input.rpcs && input.rpcs.length > 0) {
+    items.push({
+      id: 'review_public_rpcs',
+      kind: 'review',
+      task: coverage(
+        `Anyone with the public key can call these ${input.rpcs.length} database function(s). For each one, check that it verifies who is calling and what it is allowed to touch — or revoke EXECUTE from \`anon\`.`,
+        `Cualquiera con la clave pública puede llamar a estas ${input.rpcs.length} función(es) de la base de datos. En cada una, revisa que verifique quién llama y qué puede tocar, o quítale EXECUTE a \`anon\`.`,
+      ),
+      why: coverage(
+        'A function runs with its own checks, not the table policies around it; one marked SECURITY DEFINER skips RLS entirely.',
+        'Una función corre con sus propias comprobaciones, no con las políticas de las tablas; una marcada SECURITY DEFINER se salta la RLS por completo.',
+      ),
+      files: capped(input.rpcs.map((n) => `rpc/${n}`)),
+    });
+  }
   const builder = input.builder ?? input.signals?.builder ?? null;
   if (builder) {
     items.push({ id: `platform_${builder}`, kind: 'platform', ...PLATFORM[builder], files: [] });

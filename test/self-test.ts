@@ -12,6 +12,10 @@ import { buildReport } from '../src/reporters/markdown.js';
 import { analyzeMigrations } from '../src/checks/migrations.js';
 import {
   analyzeSupabaseExport,
+  authSettingsFindings,
+  parseAuthSettings,
+  parseOpenApiRpcs,
+  rpcFindings,
   parseOpenApiTables,
   graphqlIntrospectionFinding,
   SUPABASE_AUDIT_SQL,
@@ -2909,6 +2913,109 @@ console.log('\n42. Cookies, mixed content and the Lovable Trust center');
   assert(
     contrastTrustCenter(stale, [], null)[0]!.en.includes('stale'),
     'an expired document is called stale, not failed',
+  );
+}
+
+console.log('\n43. Supabase from outside — who can sign up, and which functions anyone can call');
+{
+  // The shape Supabase Auth's source declares for GET /settings.
+  const settings = (over: Record<string, unknown> = {}, external: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      external: { anonymous_users: false, email: true, phone: false, google: true, ...external },
+      disable_signup: false,
+      mailer_autoconfirm: false,
+      phone_autoconfirm: false,
+      sms_provider: '',
+      saml_enabled: false,
+      ...over,
+    });
+  const P = 'https://abc.supabase.co';
+  const ids = (body: string) =>
+    authSettingsFindings(parseAuthSettings(body)!, P)
+      .map((f) => f.id)
+      .join(',');
+  assert(
+    ids(settings()) === '',
+    'the default — open sign-up with email confirmation — is not a finding',
+  );
+  assert(
+    ids(settings({}, { anonymous_users: true })) === 'supabase_anonymous_signins',
+    'anonymous sign-ins: anyone becomes authenticated',
+  );
+  assert(
+    ids(settings({ mailer_autoconfirm: true })) === 'supabase_signup_autoconfirm',
+    'unverified email sign-ups',
+  );
+  assert(
+    ids(settings({ phone_autoconfirm: true })) === '',
+    'phone auto-confirm with phone sign-up off is nothing',
+  );
+  assert(
+    ids(settings({ phone_autoconfirm: true }, { phone: true })) === 'supabase_signup_autoconfirm',
+    'phone auto-confirm with phone sign-up on is the same finding',
+  );
+  assert(
+    ids(settings({ disable_signup: true, mailer_autoconfirm: true }, { anonymous_users: true })) ===
+      '',
+    'sign-ups closed: neither applies',
+  );
+  const anon = authSettingsFindings(
+    parseAuthSettings(settings({}, { anonymous_users: true }))!,
+    P,
+  )[0]!;
+  assert(
+    anon.severity === 'medium' && anon.why.includes('is_anonymous') && !!anon.es?.why,
+    'the advice names the is_anonymous claim, in both languages',
+  );
+  assert(
+    parseAuthSettings('{"message":"Invalid API key"}') === null,
+    'an error body is not read as settings',
+  );
+  assert(parseAuthSettings('<html></html>') === null, 'nor is HTML');
+
+  const openapi = JSON.stringify({
+    definitions: { notes: {}, profiles: {} },
+    paths: {
+      '/': {},
+      '/notes': {},
+      '/rpc/exec_sql': {},
+      '/rpc/get_feed': {},
+      '/rpc/execute_sql': {},
+    },
+  });
+  assert(
+    parseOpenApiRpcs(openapi).join(',') === 'exec_sql,execute_sql,get_feed',
+    'the callable functions are listed',
+  );
+  assert(
+    parseOpenApiRpcs('not json').length === 0,
+    'and nothing from a body that is not the document',
+  );
+  const rpcs = rpcFindings(parseOpenApiRpcs(openapi), P);
+  assert(
+    rpcs.map((f) => f.id).join(',') === 'rpc_runs_sql_exec_sql,rpc_runs_sql_execute_sql',
+    'only the ones named like they run SQL are findings',
+  );
+  assert(
+    rpcs[0]!.severity === 'high' &&
+      rpcs[0]!.why.includes('revoke execute on function public.exec_sql'),
+    'high, and the fix is the exact revoke',
+  );
+  for (const benign of [
+    'get_sql_report',
+    'query_posts',
+    'search',
+    'execute_payment',
+    'sqlite_version',
+  ]) {
+    assert(rpcFindings([benign], P).length === 0, `not named like it runs SQL: ${benign}`);
+  }
+
+  const pending = buildPending({ scanned: [], rpcs: ['get_feed', 'exec_sql'] });
+  assert(
+    pending[0]?.id === 'review_public_rpcs' &&
+      pending[0].files.join() === 'rpc/get_feed,rpc/exec_sql'.split(',').sort().join(),
+    'every callable function becomes one review item',
   );
 }
 
