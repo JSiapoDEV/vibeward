@@ -1,5 +1,5 @@
-import { writeFileSync, readFileSync, writeSync } from 'node:fs';
-import { basename } from 'node:path';
+import { readFileSync, writeSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import { buildReport } from './markdown.js';
 import { toSarif } from './sarif.js';
 import { analyzeSupabaseExport } from '../checks/supabase.js';
@@ -11,6 +11,7 @@ import type { CoverageLine, Lang } from '../core/i18n.js';
 import { isComplete } from '../core/coverage.js';
 import { builderPrompt, type PendingItem } from '../core/pending.js';
 import { ciSummary } from './ci.js';
+import { defaultReportPath, unignoredInRepo, unignoredWarning, writeReportFile } from './files.js';
 import type { TrustCenterView } from './markdown.js';
 import type { CoverageEntry } from '../core/coverage.js';
 import { C, log, todayISO } from '../core/terminal.js';
@@ -116,6 +117,16 @@ export function loadSupabaseExport(file: string): Finding[] {
     );
     return [];
   }
+}
+
+/**
+ * What a report file is named after: the host for a URL, the folder for a folder. `scan .` used
+ * to produce `vibeward-report-..md`, because the base name of `.` is `.`.
+ */
+export function reportName(target: string): string {
+  const base = /^https?:\/\//i.test(target) ? basename(target) : basename(resolve(target));
+  const clean = base.replace(/[^\w.-]/g, '_').replace(/^\.+/, '');
+  return clean || 'scan';
 }
 
 /** Builds the report, writes outputs, prints the summary, and sets the exit code. */
@@ -236,7 +247,7 @@ export function finish(
   };
 
   if (opts.summary) {
-    writeFileSync(
+    writeReportFile(
       opts.summary,
       ciSummary({
         target,
@@ -247,26 +258,35 @@ export function finish(
         pending,
         publicRepo: opts.publicSummary === true,
       }),
-      'utf8',
     );
   }
+  // Every file this run wrote, checked once at the end against git.
+  const written = [opts.summary, opts.sarif].filter((p): p is string => Boolean(p));
 
   // Machine mode: stdout carries the payload and nothing else. Report files are only
   // written when explicitly asked for, so an agent's working tree stays clean.
   if (opts.stdout) {
     writeAllSync(`${JSON.stringify(payload, null, 2)}\n`);
-    if (opts.out) writeFileSync(opts.out, markdown, 'utf8');
-    if (opts.sarif) writeFileSync(opts.sarif, toSarif(localized, VERSION), 'utf8');
+    if (opts.out) {
+      writeReportFile(opts.out, markdown);
+      written.push(opts.out);
+    }
+    if (opts.sarif) writeReportFile(opts.sarif, toSarif(localized, VERSION));
+    // stderr: stdout carries the payload and nothing else.
+    const warning = unignoredWarning(unignoredInRepo(written));
+    if (warning) process.stderr.write(`${warning}\n`);
     process.exit(counts.critical > 0 ? 2 : 0);
   }
 
-  const outPath =
-    opts.out ?? `${REPORT_STEM[lang]}-${basename(target).replace(/[^\w.-]/g, '_') || 'scan'}.md`;
-  writeFileSync(outPath, markdown, 'utf8');
+  const outPath = opts.out ?? defaultReportPath(`${REPORT_STEM[lang]}-${reportName(target)}.md`);
+  writeReportFile(outPath, markdown);
+  written.push(outPath);
   if (opts.json) {
-    writeFileSync(`${outPath.replace(/\.md$/, '')}.json`, JSON.stringify(payload, null, 2), 'utf8');
+    const jsonPath = `${outPath.replace(/\.md$/, '')}.json`;
+    writeReportFile(jsonPath, JSON.stringify(payload, null, 2));
+    written.push(jsonPath);
   }
-  if (opts.sarif) writeFileSync(opts.sarif, toSarif(localized, VERSION), 'utf8');
+  if (opts.sarif) writeReportFile(opts.sarif, toSarif(localized, VERSION));
 
   log(`\n${C.bold}── Summary ──${C.reset}`);
   const line = (c: string, label: string, n: number): void => {
@@ -305,6 +325,8 @@ export function finish(
   log(`\n${C.green}✓ Report:${C.reset} ${outPath}`);
   if (opts.json) log(`${C.green}✓ JSON:${C.reset}   ${outPath.replace(/\.md$/, '')}.json`);
   if (opts.sarif) log(`${C.green}✓ SARIF:${C.reset}  ${opts.sarif}`);
+  const tracked = unignoredWarning(unignoredInRepo(written));
+  if (tracked) log(`\n${C.yellow}${tracked}${C.reset}`);
 
   const stale = stalenessNotice();
   if (stale) log(`\n${C.yellow}⚠${C.reset} ${C.dim}${stale}${C.reset}`);

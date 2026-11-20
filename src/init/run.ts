@@ -666,7 +666,7 @@ export async function runInit(opts: InitOptions): Promise<never> {
   }
 
   log(
-    `\n  ${C.dim}Try it:${C.reset} ${C.cyan}npx vibeward@latest https://your-site.com --passive --out vibeward-report.md --yes${C.reset}\n`,
+    `\n  ${C.dim}Try it:${C.reset} ${C.cyan}npx vibeward@latest https://your-site.com --passive --yes${C.reset}\n`,
   );
 
   process.exit(0);

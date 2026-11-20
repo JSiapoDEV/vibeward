@@ -59,7 +59,7 @@ There is no plugin to install. GitLab CI, CircleCI, Jenkins, a git hook — all 
 command:
 
 ```bash
-npx vibeward@latest scan . --sarif vibeward.sarif --stdout > findings.json
+npx vibeward@latest scan . --sarif .vibeward/ci/vibeward.sarif --stdout > .vibeward/ci/findings.json
 ```
 
 Exit codes are the gate:

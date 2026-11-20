@@ -64,12 +64,12 @@ runs:
         VERSION=$(node -p "require('$ACTION_PATH/package.json').version")
         echo "vibeward $VERSION"
         if [ -n "$SCAN_URL" ]; then
-          set -- "$SCAN_URL" --sarif vibeward.sarif --yes
+          set -- "$SCAN_URL" --sarif .vibeward/ci/vibeward.sarif --yes
         else
-          set -- scan "$SCAN_PATH" --sarif vibeward.sarif --yes
+          set -- scan "$SCAN_PATH" --sarif .vibeward/ci/vibeward.sarif --yes
         fi
         if [ -n "$SUPABASE_EXPORT" ]; then set -- "$@" --supabase "$SUPABASE_EXPORT"; fi
-        set -- "$@" --lang "$REPORT_LANG" --summary vibeward-summary.md
+        set -- "$@" --lang "$REPORT_LANG" --summary .vibeward/ci/summary.md
         if [ "$REPO_PRIVATE" != "true" ]; then set -- "$@" --public-summary; fi
         set +e
         npx --yes "vibeward@$VERSION" "$@"
@@ -84,7 +84,7 @@ runs:
       if: always()
       shell: bash
       run: |
-        if [ -s vibeward-summary.md ]; then cat vibeward-summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+        if [ -s .vibeward/ci/summary.md ]; then cat .vibeward/ci/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
 
     # One issue, always the same one, so it reaches the owner's notifications and email
     # without a new issue per push. Only from the default branch — a feature branch is not
@@ -97,7 +97,8 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPORT_LANG: ${{ inputs.lang }}
       run: |
-        [ -s vibeward-summary.md ] || exit 0
+        [ -s .vibeward/ci/summary.md ] || exit 0
+        cd .vibeward/ci
         if [ "$REPORT_LANG" = "es" ]; then TITLE="vibeward: pendientes"; else TITLE="vibeward: pending"; fi
         warn() { echo "::warning::vibeward could not update the \"$TITLE\" issue. Add \`issues: write\` to the workflow permissions, or set \`issue: 'false'\`."; exit 0; }
 
@@ -110,28 +111,28 @@ runs:
 
         # Keep what the owner already ticked: an item still listed and checked before stays
         # checked. Anything vibeward no longer sees is simply gone from the new list.
-        printf '%s' "$OLD" > vibeward-issue-old.md
+        printf '%s' "$OLD" > issue-old.md
         node -e '
           const fs = require("fs");
-          const old = fs.readFileSync("vibeward-issue-old.md", "utf8");
+          const old = fs.readFileSync("issue-old.md", "utf8");
           const done = new Set([...old.matchAll(/^- \[x\] (.*)$/gim)].map((m) => m[1]));
-          const body = fs.readFileSync("vibeward-summary.md", "utf8")
+          const body = fs.readFileSync("summary.md", "utf8")
             .split("\n")
             .map((l) => { const m = /^- \[ \] (.*)$/.exec(l); return m && done.has(m[1]) ? "- [x] " + m[1] : l; })
             .join("\n");
-          fs.writeFileSync("vibeward-issue.md", body);
+          fs.writeFileSync("issue.md", body);
           process.stdout.write(String((body.match(/^- \[ \] /gm) || []).length));
-        ' > vibeward-open-count || warn
-        OPEN=$(cat vibeward-open-count)
+        ' > open-count || warn
+        OPEN=$(cat open-count)
 
         if [ "$OPEN" = "0" ]; then
           if [ -n "$NUMBER" ]; then
             gh issue close "$NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Nothing left as of $GITHUB_SHA." || warn
           fi
         elif [ -n "$NUMBER" ]; then
-          gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file vibeward-issue.md || warn
+          gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file issue.md || warn
         else
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file vibeward-issue.md || warn
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file issue.md || warn
         fi
 
     # Code scanning on a private repository needs GitHub Code Security. Without it this upload
@@ -142,4 +143,4 @@ runs:
       continue-on-error: true
       uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
       with:
-        sarif_file: vibeward.sarif
+        sarif_file: .vibeward/ci/vibeward.sarif

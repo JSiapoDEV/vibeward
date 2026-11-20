@@ -19,6 +19,8 @@ import type { Args } from '../core/args.js';
 import type { Finding } from '../core/types.js';
 
 const IGNORE_DIRS = new Set([
+  // vibeward's own reports: rescanning one would count masked evidence as new findings.
+  '.vibeward',
   'node_modules',
   '.git',
   'dist',

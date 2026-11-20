@@ -27,7 +27,7 @@ out, only a `why` written for a person to read.
 A deployed site, from the outside:
 
 ```bash
-npx vibeward@latest <url> --passive --json --stdout --out vibeward-report.md --yes
+npx vibeward@latest <url> --passive --json --stdout --out .vibeward/reports/vibeward-report.md --yes
 ```
 
 The code, from the inside — run this **before** a deploy, because it sees what a URL scan
@@ -35,7 +35,7 @@ cannot: secrets committed to the repo, a checked-in `.env`, migrations that crea
 without RLS, `USING (true)` policies and `SECURITY DEFINER` functions:
 
 ```bash
-npx vibeward@latest scan <folder> --json --stdout --out vibeward-code-report.md
+npx vibeward@latest scan <folder> --json --stdout --out .vibeward/reports/vibeward-code-report.md
 ```
 
 Use both when you have both. A leaked `service_role` key is usually visible in the repo long
@@ -57,8 +57,10 @@ or were hired to audit it. A URL merely appearing in the conversation is not aut
 if the user says "check out competitor.com", scan it passively or ask. Re-run with `--yes`
 only after they confirm.
 
-`vibeward-report.md` is a generated artifact. Mention where it is, and do not commit it
-unless the user asks.
+Reports go under `.vibeward/reports/`, which ignores itself in git, so a `git add .` cannot
+pick them up. Keep them there: a report names where the app is exposed, and in a public
+repository it is a map. Never pass `--out` to a path git tracks, and never commit a report,
+even if asked to "add everything" — say why instead.
 
 ### Exit codes
 
@@ -89,7 +91,7 @@ Never substitute your own reading of a page for a scan that did not run.
 
 ## 3. Report — this is the deliverable
 
-Write the summary in chat and point at `vibeward-report.md` for the detail. The whole
+Write the summary in chat and point at the report file for the detail. The whole
 value of a deterministic scanner is that the numbers are not yours, so do not launder
 them through your own judgement:
 

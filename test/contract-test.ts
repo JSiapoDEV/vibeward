@@ -26,6 +26,11 @@ import { AREA, isComplete } from '../src/core/coverage.js';
 import type { CoverageEntry } from '../src/core/coverage.js';
 import type { Finding } from '../src/core/types.js';
 import type { SiteFiles } from '../src/http/crawl.js';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { REPORT_DIR, unignoredInRepo, writeReportFile } from '../src/reporters/files.js';
 
 let pass = 0;
 let fail = 0;
@@ -460,6 +465,96 @@ console.log("\nContract — the setup skills do not act on the user's behalf\n")
     /coverage\.notEvaluated/.test(ci),
     'and not to let a green build overstate its own coverage',
   );
+}
+
+console.log('\nA report never waits in git to be committed');
+{
+  // A report names where an app is exposed. Written into the repository it was one
+  // `git add .` from being published; this is the promise that it cannot be.
+  const git = (cwd: string, ...args: string[]) =>
+    spawnSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' },
+    });
+  const repo = mkdtempSync(join(tmpdir(), 'vw-git-'));
+  const hasGit = git(repo, 'init', '-q').status === 0;
+  if (!hasGit) {
+    console.log('  (git not installed — skipped)');
+  } else {
+    mkdirSync(join(repo, 'src'));
+    writeFileSync(join(repo, 'src', 'app.ts'), 'export const x = 1;\n');
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.email=t@t.test', '-c', 'user.name=t', 'commit', '-qm', 'init');
+
+    // The real CLI, run from inside the repository the way a person or an agent runs it.
+    const cli = join(import.meta.dirname, '..', 'src', 'cli.ts');
+    const run = spawnSync(
+      process.execPath,
+      ['--import', import.meta.resolve('tsx'), cli, 'scan', '.', '--json'],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: { ...process.env, CI: '', GITHUB_ACTIONS: '' },
+      },
+    );
+    assert(run.status === 0, `the scan ran (exit ${run.status})`);
+    const report = join(repo, REPORT_DIR, `vibeward-report-${basename(repo)}.md`);
+    assert(
+      existsSync(report) && existsSync(join(repo, '.vibeward', '.gitignore')),
+      'the default report lands in .vibeward/reports/, named after the folder, next to an ignore file',
+    );
+    assert(
+      /^\*$/m.test(readFileSync(join(repo, '.vibeward', '.gitignore'), 'utf8')),
+      'and the folder ignores everything in it',
+    );
+    assert(existsSync(report.replace(/\.md$/, '.json')), '--json lands beside it');
+    const status = git(repo, 'status', '--porcelain', '--untracked-files=all').stdout.trim();
+    assert(
+      status === '',
+      `git status stays clean after a scan${status ? ` — saw: ${status}` : ''}`,
+    );
+    assert(
+      !/not ignored/.test(`${run.stdout}${run.stderr}`),
+      'and nothing is flagged as trackable',
+    );
+
+    // An explicit --out into the tracked tree is allowed, and said out loud.
+    const out = spawnSync(
+      process.execPath,
+      ['--import', import.meta.resolve('tsx'), cli, 'scan', '.', '--out', 'report.md'],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: { ...process.env, CI: '', GITHUB_ACTIONS: '' },
+      },
+    );
+    assert(
+      /report\.md is inside a git repository and not ignored/.test(`${out.stdout}${out.stderr}`),
+      '--out into the repository warns that git would pick it up',
+    );
+
+    writeReportFile(join(repo, '.vibeward', 'reports', 'b.md'), '# b');
+    assert(
+      unignoredInRepo([join(repo, '.vibeward', 'reports', 'b.md')], {}).length === 0,
+      'files under .vibeward/ are ignored',
+    );
+    assert(
+      unignoredInRepo([join(repo, 'report.md')], {}).length === 1,
+      'a file at the root is not',
+    );
+    assert(
+      unignoredInRepo([join(repo, 'report.md')], { CI: 'true' }).length === 0,
+      'in CI there is nothing to warn about',
+    );
+    const outside = mkdtempSync(join(tmpdir(), 'vw-nogit-'));
+    assert(
+      unignoredInRepo([join(outside, 'r.md')], {}).length === 0,
+      'outside a repository there is nothing to warn about',
+    );
+    rmSync(outside, { recursive: true, force: true });
+  }
+  rmSync(repo, { recursive: true, force: true });
 }
 
 console.log(

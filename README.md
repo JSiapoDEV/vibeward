@@ -591,7 +591,7 @@ npm i -D playwright && npx playwright install chromium
 | `--summary <file>` | Write the CI summary: counts, what to fix, pending items, the builder prompt |
 | `--public-summary` | The summary will be public: count findings, never name or place them |
 | `--lang <en\|es>` | Report language, English by default. The CLI itself stays English |
-| `--out <file.md>` | Report path (default: `vibeward-report-<host>.md`, `informe-<host>.md` in Spanish) |
+| `--out <file.md>` | Report path (default: `.vibeward/reports/vibeward-report-<host>.md`, `informe-<host>.md` in Spanish). `.vibeward/` ignores itself in git; an `--out` that git would track gets a warning |
 | `--json` | Also dump raw findings as JSON |
 | `--stdout` | Print the JSON payload on stdout, everything else on stderr (implies `--yes`) |
 | `--yes` | Pre-authorize the backend probes (Supabase/Firebase), skipping the prompt |
