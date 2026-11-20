@@ -56,7 +56,17 @@ export interface Host {
   label: string;
   /** Where the SKILL.md goes. `user` is null when the host has no global location. */
   skill: { project: string; user: string | null };
-  hooks: { project: string; user: string; format: HookFormat } | null;
+  hooks: {
+    project: string;
+    user: string;
+    format: HookFormat;
+    /**
+     * The project file is personal — ignored by git, never committed — so the hook can run a
+     * copy that lives in the user's home instead of `npx`, and a teammate who clones the repo
+     * does not inherit somebody else's guard.
+     */
+    personal?: boolean;
+  } | null;
   moments: Record<Moment, MomentSupport>;
   /**
    * The event that fires when the agent finishes its turn, when the host can show the person a
@@ -85,10 +95,13 @@ export const HOSTS: Host[] = [
       project: '.claude/skills/vibeward/SKILL.md',
       user: '.claude/skills/vibeward/SKILL.md',
     },
+    // `settings.local.json`, not `settings.json`: the shared file is committed, so hooks
+    // written there ran on every teammate's machine, through `npx`, ~2 s per step.
     hooks: {
-      project: '.claude/settings.json',
+      project: '.claude/settings.local.json',
       user: '.claude/settings.json',
       format: 'claude-settings',
+      personal: true,
     },
     moments: {
       prompt: { event: 'UserPromptSubmit', canNote: true, canBlock: true },

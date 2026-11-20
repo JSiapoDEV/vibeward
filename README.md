@@ -290,7 +290,8 @@ version that predates the pin — keeping any flags you added. That is how a hoo
 re-run it when the staleness notice asks you to.
 
 To do it by hand instead, add it as a **Claude Code** `UserPromptSubmit` hook (in
-`~/.claude/settings.json` or a project's `.claude/settings.json`), pinned to an exact version:
+`~/.claude/settings.json`, or a project's `.claude/settings.local.json` — the personal one, so it
+is not committed and does not run on every teammate's machine), pinned to an exact version:
 
 ```json
 {
@@ -474,8 +475,17 @@ gate never sees it, because there was no prompt.
 
 It previews every file before touching disk, never overwrites a file it did not write, merges
 settings files key by key (your other hooks stay put) and markdown between markers — so
-re-running is how you *update*. It backs up any existing file to `<file>.vibeward.bak` before its
-first change, and works non-interactively for CI and dotfiles:
+re-running is how you *update*. It backs up any existing file to `.vibeward/backups/` before its
+first change — a folder git ignores on its own — and works non-interactively for CI and dotfiles.
+
+In a project, the Claude Code hooks go to `.claude/settings.local.json`, which `init` adds to
+`.git/info/exclude` (local, never committed) when git would otherwise see it. Because that file is
+yours alone, the hook runs a local copy of vibeward instead of `npx`: about 0.1 s per step instead
+of 2. Hooks an older version left in the shared `.claude/settings.json` are moved out; yours stay.
+
+The guard reads what the agent is about to write, run or has just read — that is how it checks
+it — on your machine only. Nothing is sent anywhere and nothing is kept, except the one-line labels
+of what it flagged, held in your OS temp folder until the end-of-turn summary shows them.
 
 ```bash
 vibeward init --scope project --targets claude-code,cursor --moments prompt,action --yes

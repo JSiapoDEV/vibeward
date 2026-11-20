@@ -30,7 +30,7 @@ export function defaultReportPath(name: string): string {
 }
 
 /** If `path` sits inside a `.vibeward` folder, make sure that folder ignores itself. */
-function ignoreOwnFolder(path: string): void {
+export function ignoreOwnFolder(path: string): void {
   const parts = resolve(path).split(sep);
   const at = parts.lastIndexOf('.vibeward');
   if (at < 0) return;

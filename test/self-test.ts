@@ -44,7 +44,7 @@ import {
 } from '../src/checks/web.js';
 import { checkPlainHttp, followPlainHttp } from '../src/checks/transport.js';
 import { checkUploadValidation, hasFileInput } from '../src/checks/uploads.js';
-import { scanWriteMoment } from '../src/guard/moments.js';
+import { scanCommandMoment, scanWriteMoment } from '../src/guard/moments.js';
 import { folderCoverage, scanFolder } from '../src/scanners/folder.js';
 import {
   buildPending,
@@ -3573,6 +3573,22 @@ console.log('\n47. Pending items that point at the right files');
     /and 5 more/.test(pendingMarkdown([], items, 'en')) &&
       /y 5 más/.test(pendingMarkdown([], items, 'es')),
     'and the report says "and N more", in both languages',
+  );
+}
+
+console.log('\n48. Commands that pass a secret to a local tool are not a network leak');
+{
+  const cmd = (c: string) => scanCommandMoment(c).map((r) => r.id);
+  assert(
+    cmd(`printf '%s\\n' "$SUDO_ADMIN" | ssh oracle-admin 'sudo -S systemctl restart app'`)
+      .length === 0,
+    'a sudo password piped to ssh is not flagged as a secret sent over the network',
+  );
+  assert(
+    cmd('curl -H "Authorization: Bearer $API_TOKEN" https://api.example.test').includes(
+      'cmd-secret-to-network',
+    ),
+    'a token interpolated into curl still is',
   );
 }
 

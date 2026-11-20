@@ -584,6 +584,125 @@ console.log('\nA report never waits in git to be committed');
   rmSync(repo, { recursive: true, force: true });
 }
 
+console.log('\ninit in a real repository — personal hooks, backups out of the tree');
+{
+  const git = (cwd: string, ...args: string[]) =>
+    spawnSync('git', ['-C', cwd, '-c', 'user.email=t@t.test', '-c', 'user.name=t', ...args], {
+      encoding: 'utf8',
+    });
+  const repo = mkdtempSync(join(tmpdir(), 'vw-init-'));
+  const home = mkdtempSync(join(tmpdir(), 'vw-home-'));
+  if (git(repo, 'init', '-q').status === 0) {
+    mkdirSync(join(repo, '.claude'));
+    writeFileSync(join(repo, 'CLAUDE.md'), '# Proyecto\n\nReglas del equipo.\n');
+    // A shared settings file as 0.8.0 left it: our guard beside the team's own hook.
+    writeFileSync(
+      join(repo, '.claude', 'settings.json'),
+      JSON.stringify(
+        {
+          permissions: { allow: ['Bash(npm test)'] },
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: 'Bash',
+                hooks: [
+                  {
+                    type: 'command',
+                    command: 'npx vibeward@0.8.0 guard',
+                    vibeward: 'vibeward v0.8.0',
+                  },
+                  { type: 'command', command: './scripts/team-hook.sh' },
+                ],
+              },
+            ],
+            Stop: [
+              {
+                hooks: [
+                  {
+                    type: 'command',
+                    command: 'npx vibeward@0.8.0 guard',
+                    vibeward: 'vibeward v0.8.0',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'init');
+
+    const cli = join(import.meta.dirname, '..', 'src', 'cli.ts');
+    const run = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        import.meta.resolve('tsx'),
+        cli,
+        'init',
+        '--scope',
+        'project',
+        '--targets',
+        'claude-code,claude-md',
+        '--moments',
+        'prompt,action',
+        '--yes',
+      ],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin', CI: '' },
+      },
+    );
+    assert(
+      run.status === 0,
+      `init ran (exit ${run.status})${run.status ? ` — ${run.stderr.slice(0, 200)}` : ''}`,
+    );
+
+    const local = readFileSync(join(repo, '.claude', 'settings.local.json'), 'utf8');
+    assert(
+      /"Stop"/.test(local) && /vibeward\.mjs\\?" guard/.test(local) && !/npx/.test(local),
+      'the Claude Code hooks go to settings.local.json and run the local copy, not npx',
+    );
+    const shared = JSON.parse(readFileSync(join(repo, '.claude', 'settings.json'), 'utf8'));
+    const sharedText = JSON.stringify(shared);
+    assert(
+      !/vibeward/.test(sharedText) &&
+        /team-hook\.sh/.test(sharedText) &&
+        shared.permissions?.allow?.length === 1,
+      "the old guard leaves the shared settings.json; the team's hook and permissions stay",
+    );
+    assert(
+      existsSync(join(repo, '.vibeward', 'backups', 'CLAUDE.md.bak')) &&
+        !existsSync(join(repo, 'CLAUDE.md.vibeward.bak')),
+      'the CLAUDE.md backup goes to .vibeward/backups/, not beside the file',
+    );
+    assert(
+      existsSync(join(repo, '.vibeward', 'backups', '.claude', 'settings.json.bak')),
+      'and so does the settings.json one',
+    );
+    assert(
+      !/[Ss]upabase/.test(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')),
+      'CLAUDE.md does not mention Supabase in a project without it',
+    );
+
+    const status = git(repo, 'status', '--porcelain', '--untracked-files=all').stdout;
+    assert(
+      !/settings\.local\.json|\.vibeward|\.bak/.test(status),
+      `git sees none of the personal files${/settings\.local|\.vibeward|\.bak/.test(status) ? ` — saw: ${status}` : ''}`,
+    );
+    assert(
+      /CLAUDE\.md/.test(status) && /settings\.json/.test(status),
+      'only the two edited, tracked files show as modified',
+    );
+  }
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+}
+
 console.log(
   fail === 0 ? `\n✅  ${pass} passed, 0 failed\n` : `\n❌  ${pass} passed, ${fail} failed\n`,
 );

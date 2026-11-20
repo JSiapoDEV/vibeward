@@ -16,7 +16,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_GUARD_LEVEL, isGuardLevel } from '../guard/verdict.js';
 import type { GuardLevel, Moment } from '../guard/verdict.js';
 import type { Choice } from '../core/prompt.js';
@@ -25,6 +26,8 @@ import { C, confirm, log } from '../core/terminal.js';
 import { stalenessNotice } from '../core/version.js';
 import { resolveGuard, upgradeGuardCommand, vendorGuard } from './binary.js';
 import { guardHandlers } from './hooks.js';
+import { findHost } from './capabilities.js';
+import { ignoreOwnFolder } from '../reporters/files.js';
 import type { RenderContext } from './templates.js';
 import { MARK, MARKER_END, MARKER_START } from './templates.js';
 import type { Scope, Target, TargetFile } from './targets.js';
@@ -498,16 +501,23 @@ function resolveTargets(ids: string[], scope: Scope): Target[] {
  * scope `init` now writes that file itself. The PATH lookup stays ahead of both, because
  * someone who does have the binary should not be made worse off by a docs decision.
  */
-function resolveGuardContext(wanted: boolean, scope: Scope, moments: Moment[]): RenderContext {
+function resolveGuardContext(
+  wanted: boolean,
+  scope: Scope,
+  moments: Moment[],
+  /** Every hook file this run writes is personal: ignored by git, never committed. */
+  personal = false,
+): RenderContext {
   const guard = resolveGuard();
   if (!wanted || guard.binary) {
     return { guardCommand: guard.command, guardTimeout: guard.timeout, moments };
   }
 
-  // Project scope keeps the pin. `.claude/settings.json` gets committed, so an absolute path
-  // into one developer's home is two problems at once: a hook that fails for everybody else
-  // on the team, and that developer's username published in a repository.
-  const vendored = scope === 'user' ? vendorGuard(homedir()) : null;
+  // A shared project file keeps the pin. A committed settings file with an absolute path into
+  // one developer's home is two problems at once: a hook that fails for everybody else on the
+  // team, and that developer's username published in a repository. A personal file — Claude
+  // Code's `settings.local.json` — has neither problem, so it gets the fast local copy too.
+  const vendored = scope === 'user' || personal ? vendorGuard(homedir()) : null;
   if (vendored) {
     log(
       `\n${C.green}✓${C.reset} ${C.dim}Guard copy at${C.reset} ${C.cyan}${vendored.binary}${C.reset}`,
@@ -531,7 +541,7 @@ function resolveGuardContext(wanted: boolean, scope: Scope, moments: Moment[]): 
   );
   if (scope === 'project') {
     log(
-      `${C.dim}(A project settings file is shared, so it stays on npx. \`--scope user\` is faster.)${C.reset}`,
+      `${C.dim}(A shared project hook file stays on npx, so it works for whoever clones the repo. \`--scope user\` is faster.)${C.reset}`,
     );
   }
   return { guardCommand: guard.command, guardTimeout: guard.timeout, moments };
@@ -545,11 +555,82 @@ function resolveGuardContext(wanted: boolean, scope: Scope, moments: Moment[]): 
  * Copies the file aside before the first time vibeward changes it. Only the first time: a
  * second run must not bury the pristine original under its own output.
  */
-function backupOnce(path: string): string | null {
-  const backup = `${path}.vibeward.bak`;
+function backupOnce(path: string, cwd: string, home: string): string | null {
+  // Under `.vibeward/backups/`, which ignores itself — not beside the file, where
+  // `CLAUDE.md.vibeward.bak` sat in the repository root, untracked, one `git add .` away.
+  const base = path.startsWith(cwd + sep) ? cwd : path.startsWith(home + sep) ? home : null;
+  const backup = base
+    ? join(base, '.vibeward', 'backups', `${relative(base, path)}.bak`)
+    : `${path}.vibeward.bak`;
   if (existsSync(backup)) return null;
+  mkdirSync(dirname(backup), { recursive: true });
+  ignoreOwnFolder(backup);
   copyFileSync(path, backup);
   return backup;
+}
+
+/**
+ * Makes git ignore a personal file without touching the user's `.gitignore`: the line goes into
+ * `.git/info/exclude`, which is local to this clone and never committed. Returns true when it
+ * added the line.
+ */
+export function excludeLocally(cwd: string, relPath: string): boolean {
+  const ignored = spawnSync('git', ['-C', cwd, 'check-ignore', '-q', relPath], { stdio: 'ignore' });
+  if (ignored.status !== 1) return false; // already ignored, or not a repository
+  const where = spawnSync('git', ['-C', cwd, 'rev-parse', '--git-path', 'info/exclude'], {
+    encoding: 'utf8',
+  });
+  if (where.status !== 0) return false;
+  const file = resolve(cwd, where.stdout.trim());
+  const line = `/${relPath.split(sep).join('/')}`;
+  const current = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  if (current.split('\n').includes(line)) return false;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    `${current}${current && !current.endsWith('\n') ? '\n' : ''}${line}\n`,
+    'utf8',
+  );
+  return true;
+}
+
+/**
+ * Takes vibeward's own hooks out of the shared `.claude/settings.json`, now that the project
+ * install writes them to `settings.local.json`. Only handlers vibeward wrote are removed; the
+ * rest of the file is left exactly as the user had it. Returns true when it changed the file.
+ */
+export function removeOurHooks(raw: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const settings = parsed as Record<string, unknown>;
+  const hooks = settings.hooks;
+  if (typeof hooks !== 'object' || hooks === null) return null;
+  let changed = false;
+  for (const [event, groups] of Object.entries(hooks as Record<string, unknown>)) {
+    if (!Array.isArray(groups)) continue;
+    const kept: unknown[] = [];
+    for (const group of groups) {
+      if (guardHandlers(group).length === 0) {
+        kept.push(group);
+        continue;
+      }
+      changed = true;
+      const record = group as Record<string, unknown>;
+      const handlers = Array.isArray(record.hooks) ? record.hooks : [];
+      const foreign = handlers.filter((h) => guardHandlers({ hooks: [h] }).length === 0);
+      if (foreign.length > 0) kept.push({ ...record, hooks: foreign });
+    }
+    if (kept.length > 0) (hooks as Record<string, unknown>)[event] = kept;
+    else delete (hooks as Record<string, unknown>)[event];
+  }
+  if (!changed) return null;
+  if (Object.keys(hooks).length === 0) delete settings.hooks;
+  return `${JSON.stringify(settings, null, 2)}\n`;
 }
 
 function writeRow(plan: PlanRow, cwd: string, home: string): void {
@@ -557,7 +638,7 @@ function writeRow(plan: PlanRow, cwd: string, home: string): void {
   const shown = display(plan.path, cwd, home);
   mkdirSync(dirname(plan.path), { recursive: true });
 
-  const backup = existsSync(plan.path) ? backupOnce(plan.path) : null;
+  const backup = existsSync(plan.path) ? backupOnce(plan.path, cwd, home) : null;
   writeFileSync(plan.path, plan.content, 'utf8');
 
   const verb = plan.action === 'create' ? 'created' : 'updated';
@@ -622,7 +703,10 @@ export async function runInit(opts: InitOptions): Promise<never> {
     level = picked;
   }
 
-  const ctx = resolveGuardContext(guarded, scope, moments);
+  const personal = chosen
+    .filter((t) => t.guardable === true)
+    .every((t) => findHost(t.id)?.hooks?.personal === true);
+  const ctx = resolveGuardContext(guarded, scope, moments, personal);
   // The always-on rules name Supabase only in a project that uses it. A user-level install
   // serves every repository, so it stays undefined and the rules say "if".
   if (scope === 'project') ctx.supabase = usesSupabase(cwd);
@@ -676,7 +760,7 @@ export async function runInit(opts: InitOptions): Promise<never> {
   }
   if (pending.some((r) => r.action === 'merge')) {
     log(
-      `\n${C.dim}Existing files are merged, never overwritten, and copied to <file>.vibeward.bak first.${C.reset}`,
+      `\n${C.dim}Existing files are merged, never overwritten, and copied to .vibeward/backups/ first.${C.reset}`,
     );
   }
 
@@ -687,6 +771,26 @@ export async function runInit(opts: InitOptions): Promise<never> {
 
   log('');
   for (const r of pending) writeRow(r, cwd, home);
+
+  // The Claude Code project hooks are personal now: keep git from offering the file, and take
+  // the ones an earlier version wrote out of the shared settings, so they do not run twice.
+  if (scope === 'project' && installed.some((r) => r.target.id === 'claude-code')) {
+    const local = join('.claude', 'settings.local.json');
+    if (existsSync(join(cwd, local)) && excludeLocally(cwd, local)) {
+      log(
+        `  ${C.green}✓${C.reset} ${local} ${C.dim}added to .git/info/exclude (local, not committed)${C.reset}`,
+      );
+    }
+    const shared = join(cwd, '.claude', 'settings.json');
+    const cleaned = existsSync(shared) ? removeOurHooks(readFileSync(shared, 'utf8')) : null;
+    if (cleaned !== null) {
+      const backup = backupOnce(shared, cwd, home);
+      writeFileSync(shared, cleaned, 'utf8');
+      log(
+        `  ${C.green}✓${C.reset} moved the guard out of .claude/settings.json${backup ? ` ${C.dim}(backup: ${display(backup, cwd, home)})${C.reset}` : ''}`,
+      );
+    }
+  }
 
   // What it does, and what it does not. The second half is the part a user cannot find out
   // any other way, and the part that decides whether they over-trust this.
