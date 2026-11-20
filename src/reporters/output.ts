@@ -190,6 +190,8 @@ export function finish(
     tool: 'vibeward',
     version: VERSION,
     target,
+    /** What the report is titled after: the host, or the folder's own name for `scan .`. */
+    name: reportName(target),
     dateISO,
     lang,
     verdict,
@@ -233,7 +235,6 @@ export function finish(
       task: coverageText(p.task, lang),
       why: coverageText(p.why, lang),
       files: p.files,
-      total: p.total ?? p.files.length,
     })),
     /** The same, as one message to paste into a builder's chat. Null when nothing is pending. */
     builderPrompt: builderPrompt(localized, pending, lang),

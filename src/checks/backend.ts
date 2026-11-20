@@ -96,7 +96,10 @@ export function checkExportFormulaInjection(path: string, content: string): Find
   if (!writer) return null;
   if (FORMULA_SANITIZED.test(content)) return null;
   const line = content.slice(0, writer.index).split('\n').length;
-  return {
+  // Said only where it applies: a CSV helper that has nothing to do with exceljs does not need
+  // to hear that its .xlsx export is fine.
+  const xlsx = /exceljs/i.test(content);
+  const finding: Finding = {
     id: `formula_injection_${path.replace(/[^A-Za-z0-9]/g, '_')}`,
     es: {
       label: 'La exportación a CSV puede permitir inyección de fórmulas',
@@ -104,7 +107,7 @@ export function checkExportFormulaInjection(path: string, content: string): Find
         'Las celdas se citan (comas y comillas) pero nada neutraliza una celda de texto que empieza por `=`, `+`, `-` o `@`.',
       exploit:
         'Alguien guarda `=HYPERLINK(...)` en un campo de texto; quien abra el CSV en Excel o Google Sheets ve una fórmula que se ejecuta. Si otra persona puede escribir datos que terminan en tu exportación, el ataque es contra ti.',
-      why: 'Neutraliza solo las celdas de texto: si un texto empieza por `=`, `+`, `-`, `@`, tabulador o retorno de carro, antepón una comilla simple. Deja los números como números: anteponerla a un monto negativo lo convierte en texto. Si también exportas a .xlsx con exceljs, esa parte ya guarda el texto como texto.',
+      why: 'Neutraliza solo las celdas de texto: si un texto empieza por `=`, `+`, `-`, `@`, tabulador o retorno de carro, antepón una comilla simple. Deja los números como números: anteponerla a un monto negativo lo convierte en texto.',
     },
     label: 'CSV export may allow formula injection',
     severity: 'medium',
@@ -115,12 +118,20 @@ export function checkExportFormulaInjection(path: string, content: string): Find
       'Cells are quoted (commas and quotes) but nothing neutralises a text cell that starts with `=`, `+`, `-` or `@`.',
     exploit:
       'Someone stores `=HYPERLINK(...)` in a text field; whoever opens the CSV in Excel or Google Sheets gets a formula that runs. If another person can write data that ends up in your export, the attack is on you.',
-    why: 'Neutralise text cells only: when a string starts with `=`, `+`, `-`, `@`, a tab or a carriage return, put a single quote in front. Leave numbers as numbers — prefixing a negative amount turns it into text. An .xlsx written with exceljs already stores text as text.',
+    why: 'Neutralise text cells only: when a string starts with `=`, `+`, `-`, `@`, a tab or a carriage return, put a single quote in front. Leave numbers as numbers — prefixing a negative amount turns it into text.',
     references: [
       'https://cwe.mitre.org/data/definitions/1236.html',
       'https://owasp.org/www-community/attacks/CSV_Injection',
     ],
   };
+  if (xlsx) {
+    finding.why += ' The .xlsx written with exceljs in this file already stores text as text.';
+    if (finding.es?.why) {
+      finding.es.why +=
+        ' El .xlsx que este archivo escribe con exceljs ya guarda el texto como texto.';
+    }
+  }
+  return finding;
 }
 
 /** Runs every backend check against one source file. */

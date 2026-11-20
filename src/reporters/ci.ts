@@ -12,7 +12,7 @@
 // prints a finding's evidence, on any repository: evidence is where a secret would be quoted.
 
 import { VERSION } from '../core/version.js';
-import { builderPrompt, moreText, type PendingItem } from '../core/pending.js';
+import { builderPrompt, moreText, shownFiles, type PendingItem } from '../core/pending.js';
 import { coverageText, type Lang } from '../core/i18n.js';
 import { isWeb, type Finding, type Severity } from '../core/types.js';
 
@@ -102,7 +102,9 @@ export function ciSummary(input: CiSummaryInput): string {
     for (const item of input.pending) {
       md += `- [ ] **${t.kind[item.kind]}** — ${coverageText(item.task, input.lang)}\n`;
       if (item.files.length > 0) {
-        md += `  ${t.files}: ${item.files.map((f) => `\`${f}\``).join(', ')}${moreText(item, input.lang)}\n`;
+        md += `  ${t.files}: ${shownFiles(item)
+          .map((f) => `\`${f}\``)
+          .join(', ')}${moreText(item, input.lang)}\n`;
       }
     }
     md += '\n';

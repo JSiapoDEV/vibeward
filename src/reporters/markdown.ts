@@ -379,7 +379,7 @@ export function buildReport({
 
   md += `## ${t.detailedFindings}\n\n`;
   if (sorted.length === 0) {
-    md += `${t.noFindings}\n\n`;
+    md += `${t.noFindings(folder)}\n\n`;
   } else {
     sorted.forEach((f, i) => {
       md += `### ${i + 1}. ${t.sevHeading[f.severity]} — ${f.label}\n\n`;
@@ -447,7 +447,7 @@ export function buildReport({
   if (pendingSection) md += `\n---\n\n${pendingSection}`;
 
   md += `\n---\n\n## ${t.nextStepsTitle}\n\n`;
-  md += `${counts.critical > 0 ? criticalSteps(sorted, t.steps) : t.nextStepsNormal}\n\n`;
+  md += `${counts.critical > 0 ? criticalSteps(sorted, t.steps) : t.nextStepsNormal(folder)}\n\n`;
   if (hasWeb && web.length > 0) md += `${t.initHint}\n\n`;
 
   md += `---\n\n`;

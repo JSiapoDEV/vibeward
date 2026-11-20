@@ -1,7 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, extname, basename, sep } from 'node:path';
-import { asLocalOnly, mergeRepeatedSecrets, scanSource } from '../checks/secrets.js';
+import {
+  asBrowserBound,
+  asLocalOnly,
+  BROWSER_ENV_PREFIX,
+  mergeRepeatedSecrets,
+  scanSource,
+} from '../checks/secrets.js';
 import { scanBackendFile } from '../checks/backend.js';
 import { checkUploadValidation } from '../checks/uploads.js';
 import { analyzeMigrations } from '../checks/migrations.js';
@@ -9,6 +15,8 @@ import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { C, log } from '../core/terminal.js';
 import { AREA, ledger } from '../core/coverage.js';
 import { coverage } from '../core/i18n.js';
+import { VERSION } from '../core/version.js';
+import { isOlder } from '../init/binary.js';
 import { HISTORY_MAX_COMMITS, onlyDeleted, scanHistory } from './history.js';
 import {
   buildPending,
@@ -62,6 +70,13 @@ const SCAN_EXT = new Set([
   // GoogleService-Info.plist carries the iOS app's Firebase key; it was the one key in a real
   // repository that no scan ever read.
   '.plist',
+  // Mobile code. Flutter's generated firebase_options.dart carries the keys for every
+  // platform, and in a real app the web one existed nowhere else — so it was never seen.
+  '.dart',
+  '.kt',
+  '.kts',
+  '.swift',
+  '.gradle',
 ]);
 const SCAN_FILE = new Set(['Dockerfile', 'dockerfile', 'Procfile']);
 const MAX_FILE = 2_000_000; // skip files larger than 2 MB
@@ -120,6 +135,10 @@ export function gitView(root: string): GitView | null {
   };
 }
 
+/** Test code, in the conventions of the languages scanned. */
+const TEST_PATH =
+  /(^|\/)(?:test|tests|__tests__|spec|specs|fixtures?|e2e|__mocks__|mocks?)\/|\.(?:test|spec)\.[a-z]+$|_test\.(?:dart|go|py)$|Tests?\.(?:kt|swift|java)$/;
+
 /** A real `.env`, as opposed to the committed sample of one. */
 function isEnvName(base: string): boolean {
   return base === '.env' || (base.startsWith('.env') && !ENV_SAFE.test(base));
@@ -163,6 +182,70 @@ function collectFiles(dir: string, root: string, view: GitView | null): Collecte
   return out;
 }
 
+/** A report an older vibeward wrote beside the code, before reports went to `.vibeward/`. */
+const OLD_REPORT_NAME = /^(?:vibeward-report|vibeward-code-report|informe)-?.*\.md$/i;
+const REPORT_FOOTER = /_(?:Generated with|Generado con) vibeward v\d/;
+
+/** Where editors keep their hook settings — the only files whose pinned version runs. */
+const HOOK_FILE =
+  /(^|\/)\.(?:claude|codex|cursor|windsurf|opencode|gemini|codeium)\/|(^|\/)\.github\/hooks\//;
+
+/** A hook that pins the guard to a version: `npx vibeward@0.8.0 guard`, or a local copy. */
+const PINNED_GUARD =
+  /vibeward@(\d+\.\d+\.\d+)\s+guard|\.vibeward[\\/](\d+\.\d+\.\d+)[\\/]vibeward\.mjs/g;
+
+function leftoverReport(rel: string): Finding {
+  return {
+    id: `vibeward_report_in_tree_${rel.replace(/[^A-Za-z0-9]/g, '_')}`,
+    label: `A vibeward report sits in the project where git can commit it: ${rel}`,
+    severity: 'low',
+    check: 3,
+    cwe: 'CWE-538',
+    source: rel,
+    evidence: 'A report from an earlier vibeward, outside .vibeward/ and not ignored by git',
+    exploit:
+      'A report names where the app is exposed — the file and line of each key, with its first and last characters. Committed to a public repository, it is a map.',
+    why: 'Delete it, or move it into .vibeward/reports/, which git ignores. Current versions write there.',
+    references: ['https://cwe.mitre.org/data/definitions/538.html'],
+    es: {
+      label: `Hay un informe de vibeward en el proyecto, donde git puede commitearlo: ${rel}`,
+      evidence: 'Un informe de una versión anterior de vibeward, fuera de .vibeward/ y sin ignorar',
+      exploit:
+        'Un informe dice dónde está expuesta la app: archivo y línea de cada clave, con sus primeros y últimos caracteres. Subido a un repositorio público, es un mapa.',
+      why: 'Bórralo, o muévelo a .vibeward/reports/, que git ignora. Las versiones actuales escriben ahí.',
+    },
+  };
+}
+
+/** One finding for every hook file still on an older guard: one problem, one re-run fixes it. */
+function outdatedGuard(files: { rel: string; version: string }[]): Finding {
+  const version = files[0]!.version;
+  const rel = files[0]!.rel;
+  const others = files.slice(1).map((f) => f.rel);
+  const also = others.length > 0 ? ` — also ${others.join(', ')}` : '';
+  const alsoEs = others.length > 0 ? ` — también ${others.join(', ')}` : '';
+  return {
+    id: 'vibeward_guard_outdated',
+    label: `Editor hooks run an older vibeward guard (${version}) in ${files.length} file(s)`,
+    severity: 'low',
+    check: 3,
+    cwe: 'CWE-1104',
+    source: rel,
+    evidence: `Pinned to vibeward ${version}; this is ${VERSION}${also}`,
+    exploit:
+      'The guard on every prompt and every edit is running rules this version has since corrected — false alarms included.',
+    why: 'Re-run `npx vibeward@latest init` to raise the pin; it rewrites the hook in place and keeps your flags.',
+    references: ['https://cwe.mitre.org/data/definitions/1104.html'],
+    es: {
+      label: `Los hooks del editor corren un guardián de vibeward antiguo (${version}) en ${files.length} archivo(s)`,
+      evidence: `Fijado a vibeward ${version}; esta es la ${VERSION}${alsoEs}`,
+      exploit:
+        'El guardián de cada prompt y cada edición corre reglas que esta versión ya corrigió, falsas alarmas incluidas.',
+      why: 'Vuelve a ejecutar `npx vibeward@latest init` para subir la versión; reescribe el hook en su sitio y conserva tus opciones.',
+    },
+  };
+}
+
 /** Files that set security headers outside the framework: a proxy or a host config. */
 const HEADER_CONFIG = /\.conf$|^_headers$|^Caddyfile$|^\.htaccess$|^vercel\.json$|^netlify\.toml$/i;
 const SECURITY_HEADER =
@@ -182,6 +265,7 @@ export function scanFolder(root: string, view: GitView | null = gitView(root)): 
   let filesScanned = 0;
   let supabaseContext = false;
   let headersElsewhere = false;
+  const outdated: { rel: string; version: string }[] = [];
   const signals = emptySignals();
 
   for (const { full: file, ignored } of collectFiles(root, root, view)) {
@@ -200,6 +284,10 @@ export function scanFolder(root: string, view: GitView | null = gitView(root)): 
     }
 
     const isEnv = isEnvName(base);
+    if (OLD_REPORT_NAME.test(base) && !ignored) {
+      const content = read(file);
+      if (content && REPORT_FOOTER.test(content)) findings.push(leftoverReport(rel));
+    }
     if (HEADER_CONFIG.test(base)) {
       const content = read(file);
       if (content && SECURITY_HEADER.test(content)) headersElsewhere = true;
@@ -219,9 +307,33 @@ export function scanFolder(root: string, view: GitView | null = gitView(root)): 
 
     // An ignored `.env` that no commit ever touched is on this machine, not in the repo.
     const localOnly = ignored && isEnv && !view?.everCommitted(rel.split(sep).join('/'));
-    const secrets = scanSource(content, rel);
-    findings.push(...(localOnly ? secrets.map(asLocalOnly) : secrets));
+    // In a test, `token = "…"` is a fixture: the generic rule is noise there. A vendor key in a
+    // test is still a real key that leaked, so every other rule keeps reading test files.
+    const secrets = scanSource(content, rel).filter(
+      (f) => f.id !== 'generic_secret_assign' || !TEST_PATH.test(rel.split(sep).join('/')),
+    );
+    findings.push(
+      ...(localOnly
+        ? secrets.map((f) =>
+            // Judged by the line it sits on: a `VITE_` key is not local, it ships.
+            BROWSER_ENV_PREFIX.test(
+              content.split('\n')[Number(f.source?.split(':').pop()) - 1] ?? '',
+            )
+              ? asBrowserBound(f)
+              : asLocalOnly(f),
+          )
+        : secrets),
+    );
     findings.push(...scanBackendFile(rel, content));
+    for (const m of HOOK_FILE.test(rel.split(sep).join('/'))
+      ? content.matchAll(PINNED_GUARD)
+      : []) {
+      const pinned = m[1] ?? m[2] ?? '';
+      if (pinned && isOlder(pinned, VERSION)) {
+        outdated.push({ rel: rel.split(sep).join('/'), version: pinned });
+        break;
+      }
+    }
     collectSignals(signals, rel, content);
     const upload = checkUploadValidation(rel, content);
     if (upload) findings.push(upload);
@@ -248,6 +360,7 @@ export function scanFolder(root: string, view: GitView | null = gitView(root)): 
 
   // Headers set by nginx, a host or a proxy are headers the app has; asking for them again in
   // next.config would send someone to fix what is already fixed.
+  if (outdated.length > 0) findings.push(outdatedGuard(outdated));
   const kept = headersElsewhere
     ? findings.filter((f) => f.id !== 'nextjs_no_security_headers')
     : findings;
@@ -303,8 +416,8 @@ export function folderCoverage(input: {
     // project was judged on a model it does not use.
     cov.checked(
       AREA.sqlMigrations,
-      `SQL migrations in ${migrations} file(s) (SECURITY DEFINER and dynamic SQL in functions, grants)`,
-      `Migraciones SQL en ${migrations} archivo(s) (SECURITY DEFINER y SQL dinámico en funciones, permisos)`,
+      `SQL in ${migrations} file(s) (SECURITY DEFINER and dynamic SQL in functions, grants)`,
+      `SQL en ${migrations} archivo(s) (SECURITY DEFINER y SQL dinámico en funciones, permisos)`,
     );
   } else if (supabaseContext) {
     // The loudest silence this scanner had. A Supabase project whose schema is managed in the
@@ -337,8 +450,8 @@ export function folderCoverage(input: {
   // than left for the reader to infer from the absence of a database section.
   cov.notEvaluated(
     AREA.supabaseRls,
-    'a folder scan reads files and never contacts the live backend — the deployed database was not probed. Scan the URL to cover it',
-    'un escaneo de carpeta lee archivos y nunca contacta con el backend en vivo — no se sondeó la base de datos desplegada. Escanea la URL para cubrirlo',
+    'The live database was not checked: a folder scan only reads files. Scan the URL to cover it',
+    'No se revisó la base de datos en producción: un escaneo de carpeta solo lee archivos. Escanea la URL para cubrirlo',
   );
 
   return cov.entries();

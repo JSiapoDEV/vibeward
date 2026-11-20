@@ -130,7 +130,20 @@ function readClaudeEvent(p: Record<string, unknown>): Incoming {
   const input = obj(p.tool_input);
 
   if (/UserPromptSubmit/i.test(event)) {
-    return { moment: 'prompt', prompt: str(p.prompt), event };
+    const prompt = str(p.prompt);
+    // A message relayed from another agent session arrives through the same event, but the
+    // person did not type it. Judging it as their request flagged one agent's report to
+    // another as "making data public"; it is text this session READ, so it gets the content
+    // rules — the ones that catch instructions aimed at the agent — and not the intent ones.
+    if (prompt && /^\s*<cross-session-message\b/.test(prompt)) {
+      return {
+        moment: 'content',
+        received: prompt,
+        source: 'a message from another agent session',
+        event,
+      };
+    }
+    return { moment: 'prompt', prompt, event };
   }
   if (/PreToolUse/i.test(event)) {
     if (SHELL_TOOL.test(toolName)) {

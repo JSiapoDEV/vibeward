@@ -153,7 +153,7 @@ function semver(raw: string): [number, number, number] | null {
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 
-function isOlder(a: string, b: string): boolean {
+export function isOlder(a: string, b: string): boolean {
   const [x, y] = [semver(a), semver(b)];
   if (!x || !y) return false; // a prerelease or a tag: not ours to reason about
   for (let i = 0; i < 3; i++) {

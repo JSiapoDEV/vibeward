@@ -2680,8 +2680,8 @@ console.log('\n41. Pending — what vibeward hands on, the same way every run');
     'a gap that is not worth a task here is left to the coverage section',
   );
   assert(
-    items.every((i) => i.files.length <= 8),
-    'files are capped',
+    /and \d+ more|^((?!more).)*$/s.test(pendingMarkdown([], items, 'en')),
+    'a long file list is cut in the report, never in the payload',
   );
   assert(
     buildPending({ scanned: [gap], signals })[0]!.files.join() === items[0]!.files.join(),
@@ -3557,21 +3557,56 @@ console.log('\n47. Pending items that point at the right files');
     'apps/api/src/llm/tools/register.ts',
     "server.tool('get_transactions', schema, handler);",
   );
+  collectSignals(
+    own,
+    'apps/api/src/llm/tools/definitions.ts',
+    "export const TOOLS = [{ name: 'get_accounts', description: 'x', parameters: { type: 'object', properties: {} } }];",
+  );
+  collectSignals(
+    own,
+    'apps/api/src/llm/tools/helpers.ts',
+    'export const fmt = (n: number) => n.toFixed(2);',
+  );
   const items = buildPending({ scanned: [], signals: own });
   const routes = items.find((i) => i.id === 'review_server_ownership')!;
   assert(
-    routes.files[0] === 'apps/api/src/routes/shared-cards.ts' &&
-      routes.files[1] === 'apps/api/src/routes/transactions.ts',
+    new Set(routes.files.slice(0, 2)).has('apps/api/src/routes/shared-cards.ts') &&
+      new Set(routes.files.slice(0, 2)).has('apps/api/src/routes/transactions.ts'),
     'routes that take an id from the request are listed first',
   );
   assert(
-    own.serverEntry.has('apps/api/src/llm/tools/register.ts'),
-    'MCP tools are entry points too',
+    routes.files[0] === 'apps/api/src/routes/transactions.ts',
+    'the file with the most id-taking routes leads',
   );
-  assert(routes.total === 13 && routes.files.length === 8, 'the list says how many there were');
+  const client = emptySignals();
+  collectSignals(
+    client,
+    'apps/web/src/hooks/use-accounts.ts',
+    "const r = await api.get('/accounts/' + id);",
+  );
+  collectSignals(client, 'apps/web/src/app/page.tsx', "'use client';\nrouter.get('/x', h);");
+  collectSignals(
+    client,
+    '.claude/workflows/report.js',
+    "app.get('/x', (req, res) => res.send('ok'));",
+  );
   assert(
-    /and 5 more/.test(pendingMarkdown([], items, 'en')) &&
-      /y 5 más/.test(pendingMarkdown([], items, 'es')),
+    client.serverEntry.size === 0,
+    'a browser-side api.get, a "use client" file and editor config are not server entry points',
+  );
+  assert(
+    own.serverEntry.has('apps/api/src/llm/tools/register.ts') &&
+      own.serverEntry.has('apps/api/src/llm/tools/definitions.ts') &&
+      !own.serverEntry.has('apps/api/src/llm/tools/helpers.ts'),
+    'MCP tools and chat-model tool definitions are entry points; a helper beside them is not',
+  );
+  assert(
+    routes.files.length === 14,
+    'the payload carries every entry point, for an agent to work through',
+  );
+  assert(
+    /and 6 more/.test(pendingMarkdown([], items, 'en')) &&
+      /y 6 más/.test(pendingMarkdown([], items, 'es')),
     'and the report says "and N more", in both languages',
   );
 }
@@ -3590,6 +3625,214 @@ console.log('\n48. Commands that pass a secret to a local tool are not a network
     ),
     'a token interpolated into curl still is',
   );
+}
+
+console.log('\n49. What an older vibeward left behind, and the last details of a real review');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'vw-leftover-'));
+  mkdirSync(join(dir, '.claude'));
+  mkdirSync(join(dir, 'test'));
+  writeFileSync(
+    join(dir, 'vibeward-report-..md'),
+    '# Informe\n\n_Generado con vibeward v0.8.0 — análisis automatizado._\n',
+  );
+  writeFileSync(join(dir, 'informe-anual.md'), '# Informe anual de la empresa\n');
+  writeFileSync(
+    join(dir, '.claude', 'settings.json'),
+    '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"npx vibeward@0.8.0 guard"}]}]}}',
+  );
+  writeFileSync(join(dir, 'test', 'fixture.ts'), "const cmd = 'npx vibeward@0.1.0 guard';");
+  const found = scanFolder(dir, null).findings.map((f) => f.id);
+  assert(
+    found.some((id) => id.startsWith('vibeward_report_in_tree_')),
+    'a report an older version wrote at the root is reported',
+  );
+  assert(
+    !found.some((id) => id.includes('informe_anual')),
+    'a markdown file that merely starts with "informe" is not',
+  );
+  assert(found.includes('vibeward_guard_outdated'), 'hooks pinned to an older guard are reported');
+  assert(
+    found.filter((id) => id === 'vibeward_guard_outdated').length === 1,
+    'a version in a test file is not a hook',
+  );
+  rmSync(dir, { recursive: true, force: true });
+
+  // A route parameter that names a public thing is not an ownership question.
+  const quote = emptySignals();
+  collectSignals(
+    quote,
+    'apps/api/src/routes/quotes.ts',
+    "router.get('/quote/:ticker', (req) => price(req.params.ticker));",
+  );
+  collectSignals(quote, 'apps/api/src/routes/cards.ts', "router.get('/cards/:cardId', handler);");
+  assert(
+    !quote.serverWithIds.has('apps/api/src/routes/quotes.ts') &&
+      quote.serverWithIds.has('apps/api/src/routes/cards.ts'),
+    ':ticker is not an id; :cardId is',
+  );
+
+  // One Firebase web key in two apps: the advice names the trap.
+  const key = ['AIza', 'Sy', 'Fake'.repeat(8), 'Q'].join('');
+  const cfg = `const c={apiKey:"${key}",authDomain:"demo.firebaseapp.com",messagingSenderId:"1"}`;
+  const two = mergeRepeatedSecrets([
+    ...scanSource(cfg, 'apps/web/src/firebase.ts'),
+    ...scanSource(cfg, 'apps/mcp/src/auth.ts'),
+  ]);
+  assert(
+    /appears in 2 places/.test(two[0]?.why ?? '') &&
+      /Aparece en 2 lugares/.test(two[0]?.es?.why ?? ''),
+    'a web key in two apps says to restrict it to both domains',
+  );
+
+  // The exceljs remark only where exceljs is.
+  const quoteOnly = 'export const esc = (v: string) => `"${v.replace(/"/g, \'""\')}"`;';
+  assert(
+    !/exceljs/.test(checkExportFormulaInjection('lib/csv.ts', quoteOnly)?.why ?? 'x'),
+    'no exceljs remark in a file without exceljs',
+  );
+  assert(
+    /exceljs/.test(
+      checkExportFormulaInjection('svc/report.ts', `import ExcelJS from "exceljs";\n${quoteOnly}`)
+        ?.why ?? '',
+    ),
+    'and the remark where the file also writes .xlsx with exceljs',
+  );
+
+  // A folder report's next steps point at the pending list, not at "a manual server review".
+  const md = buildReport({
+    target: '.',
+    dateISO: '2026-11-20',
+    findings: [],
+    rls: null,
+    scanned: [],
+    lang: 'es',
+    folder: true,
+  }).markdown;
+  assert(
+    /Revisa a mano los pendientes/.test(md) && !/revisión manual del lado del servidor/.test(md),
+    "a folder scan's next steps send the reader to the pending items",
+  );
+}
+
+console.log(
+  '\n50. Two more real projects — a long google-services.json, a VITE_ key, a Spanish escaper',
+);
+{
+  const key = ['AIza', 'Sy', 'Fake'.repeat(8), 'Q'].join('');
+  // A google-services.json with OAuth clients puts the key far from its app id.
+  const oauth = Array.from(
+    { length: 6 },
+    (_, i) => `{"client_id":"${String(i).repeat(60)}.apps.googleusercontent.com","client_type":3}`,
+  ).join(',');
+  const gsj = `{"project_info":{"project_number":"1","project_id":"p"},"client":[{"client_info":{"mobilesdk_app_id":"1:1:android:a","android_client_info":{"package_name":"pe.app"}},"oauth_client":[${oauth}],"api_key":[{"current_key":"${key}"}]}]}`;
+  assert(
+    scanSource(gsj, 'android/app/google-services.json')
+      .map((f) => f.id)
+      .join() === 'firebase_android_api_key',
+    'a google-services.json is recognised whole, however far the key sits from its app id',
+  );
+
+  // An ignored .env: local for a server secret, public for a browser-prefixed one.
+  const openai = ['sk-', 'proj-', 'Fake'.repeat(10)].join('');
+  const repo = mkdtempSync(join(tmpdir(), 'vw-vite-'));
+  const git = (...a: string[]) =>
+    spawnSync('git', ['-C', repo, '-c', 'user.email=t@t.test', '-c', 'user.name=t', ...a], {
+      encoding: 'utf8',
+    });
+  if (git('init', '-q').status === 0) {
+    writeFileSync(join(repo, '.gitignore'), '.env\n');
+    writeFileSync(
+      join(repo, '.env'),
+      `VITE_GOOGLE_MAPS_API_KEY=${key}\nVITE_OPENAI_KEY=${openai}\n`,
+    );
+    mkdirSync(join(repo, 'server'));
+    writeFileSync(join(repo, 'server', '.env'), `OPENAI_API_KEY=${`${openai.slice(0, -4)}Zq9W`}\n`);
+    writeFileSync(join(repo, 'server', '.gitignore'), '.env\n');
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+    const found = scanFolder(repo, gitView(repo)).findings;
+    const maps = found.find((f) => f.source?.startsWith('.env:1'));
+    assert(
+      maps?.id === 'google_browser_api_key' &&
+        maps.severity === 'low' &&
+        /referrer/i.test(maps.why),
+      'VITE_GOOGLE_MAPS_API_KEY: a browser key to restrict, not "local, not leaked"',
+    );
+    const vite = found.find((f) => f.source?.startsWith('.env:2'));
+    assert(
+      vite?.severity === 'critical' && /ships in the build/.test(vite.label),
+      'VITE_OPENAI_KEY: a secret that reaches the browser keeps its severity and says so',
+    );
+    const server = found.find((f) => f.source?.startsWith('server/.env'));
+    assert(
+      server?.severity === 'low' && /git ignores/.test(server.label),
+      'a server-only key in an ignored .env stays local',
+    );
+  }
+  rmSync(repo, { recursive: true, force: true });
+
+  // An escaper with any name is recognised by what it does.
+  const esc = emptySignals();
+  collectSignals(
+    esc,
+    'src/autorizacion.ts',
+    'function escapar(s: string) { return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!); }\nel.innerHTML = `<li>${escapar(x)}</li>`;',
+  );
+  collectSignals(esc, 'src/raw.ts', 'el.innerHTML = `<li>${x}</li>`;');
+  assert(
+    [...esc.htmlSinks].join() === 'src/raw.ts',
+    'a file with its own HTML escaper is not a sink; one without is',
+  );
+}
+
+console.log('\n51. Flutter: firebase_options.dart is read, and each key named by its own app id');
+{
+  const k = (tag: string) => ['AIza', 'Sy', tag.repeat(8), 'Q'].join('');
+  const dart = [
+    'static const FirebaseOptions web = FirebaseOptions(',
+    `  apiKey: '${k('Webb')}',`,
+    "  appId: '1:123:web:abc',",
+    "  messagingSenderId: '123',",
+    "  projectId: 'demo',",
+    ');',
+    'static const FirebaseOptions android = FirebaseOptions(',
+    `  apiKey: '${k('Andr')}',`,
+    "  appId: '1:123:android:abc',",
+    "  messagingSenderId: '123',",
+    ');',
+    'static const FirebaseOptions ios = FirebaseOptions(',
+    `  apiKey: '${k('Iosx')}',`,
+    "  appId: '1:123:ios:abc',",
+    "  iosBundleId: 'pe.demo',",
+    ');',
+  ].join('\n');
+  const found = scanSource(dart, 'lib/firebase_options.dart').map((f) => f.id);
+  assert(
+    found.join() === 'firebase_web_api_key,firebase_android_api_key,firebase_ios_api_key',
+    'each key in firebase_options.dart is named by the app id that follows it, not by its neighbour',
+  );
+  const dir = mkdtempSync(join(tmpdir(), 'vw-dart-'));
+  mkdirSync(join(dir, 'lib'));
+  writeFileSync(join(dir, 'lib', 'firebase_options.dart'), dart);
+  assert(
+    scanFolder(dir, null).findings.filter((f) => f.id.startsWith('firebase_')).length === 3,
+    'a folder scan reads .dart files',
+  );
+  mkdirSync(join(dir, 'test', 'models'), { recursive: true });
+  writeFileSync(
+    join(dir, 'test', 'models', 'user_test.dart'),
+    "final user = User(token = 'q8Zt3vK1mN5pR7wX2yB4eba');",
+  );
+  const openai = ['sk-', 'proj-', 'Fake'.repeat(10)].join('');
+  writeFileSync(join(dir, 'test', 'api_test.dart'), `const key = '${openai}';`);
+  const inTests = scanFolder(dir, null).findings.map((f) => f.id);
+  assert(
+    !inTests.includes('generic_secret_assign'),
+    'a token = "…" fixture in a test file is not reported',
+  );
+  assert(inTests.includes('openai_key'), 'a real vendor key in a test file still is');
+  rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);

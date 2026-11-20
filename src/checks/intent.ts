@@ -270,9 +270,12 @@ function compile(langs: Lang[]): CompiledRule[] {
         // A unicode-aware "not preceded by a word character" instead of `\b`: the target can
         // be a filename like `\.env`, and `\b` before a literal dot never matches after a
         // space. That one character is why "commit the .env so it deploys" used to slip past.
-        patterns.push(new RegExp(`\\b${verb}\\b[^\n]{0,${WINDOW}}${NOT_WORD}${target}`, 'iu'));
+        // The target is grouped. A target written as an alternation (`públic…|(todos|anyone)`)
+        // used to split the whole pattern at its `|`, so the second half matched on its own:
+        // any prompt that said "todos" or "everyone" was "making data public", verb or not.
+        patterns.push(new RegExp(`\\b${verb}\\b[^\n]{0,${WINDOW}}${NOT_WORD}(?:${target})`, 'iu'));
         if (vt.bidirectional) {
-          patterns.push(new RegExp(`${NOT_WORD}${target}[^\n]{0,${WINDOW}}\\b${verb}`, 'iu'));
+          patterns.push(new RegExp(`${NOT_WORD}(?:${target})[^\n]{0,${WINDOW}}\\b${verb}`, 'iu'));
         }
       }
     }

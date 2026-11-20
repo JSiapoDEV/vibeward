@@ -45,7 +45,7 @@ what it should do next.
 
 1. **Detects**, deterministically and with no LLM call anywhere — **25 security rules** and
    **19 website checks** over a deployed site or a code folder, plus **9 intent rules** over
-   natural language in **English, Spanish and Portuguese**, held to **1,114 assertions**.
+   natural language in **English, Spanish and Portuguese**, held to **1,163 assertions**.
 2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
 3. **Warns first**, through editor hooks, at the moments risk enters the system.
 
@@ -89,7 +89,7 @@ worth more than either tool's feature list.
 **Built with Claude Code**, which is worth saying out loud in a project whose subject is the code
 AI agents produce. The objection is obvious and fair: a security tool written by an agent is
 exactly the kind of thing this tool exists to be suspicious of. That is why every rule is
-deterministic and readable in this repository, why there are **1,114 assertions** including corpora
+deterministic and readable in this repository, why there are **1,163 assertions** including corpora
 of harmless input built specifically to make the rules misfire, and why the release notes lead
 with false positives rather than features. [`METHODOLOGY.md`](METHODOLOGY.md) states what those
 numbers were measured against, what they do not cover, and how to reproduce every one of them from
@@ -297,7 +297,7 @@ is not committed and does not run on every teammate's machine), pinned to an exa
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "npx vibeward@0.8.1 guard" }] }
+      { "hooks": [{ "type": "command", "command": "npx vibeward@0.8.2 guard" }] }
     ]
   }
 }
@@ -631,7 +631,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: JSiapoDEV/vibeward@v0.8.1
+      - uses: JSiapoDEV/vibeward@v0.8.2
         with:
           path: '.'
           # lang: es               # summary, issue and report in Spanish

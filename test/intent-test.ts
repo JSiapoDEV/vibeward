@@ -72,6 +72,9 @@ const BENIGN: [prompt: string, trap: string][] = [
   ['validate only the content-type header of the JSON request', 'not an upload'],
   ['just set the content-type of the uploaded file to image/png', 'setting, not checking'],
   ['rename the file extension to .webp', 'renaming'],
+  // A grouping bug let "everyone" or "anyone" alone match `make-public`, verb or no verb.
+  ['make sure everyone can log in with Google', 'a bare "everyone"'],
+  ['anyone on the team can review the pull request', 'a bare "anyone"'],
 ];
 
 /** Requests that must be caught. Losing one of these is the whole point of the tool. */
@@ -130,6 +133,8 @@ const BENIGN_ES: [prompt: string, trap: string][] = [
   ['valida la imagen por su contenido y además la extensión', 'content plus extension'],
   ['solo muestra el icono según la extensión del archivo', 'display, not access'],
   ['filtra solo las imágenes por extensión en la galería', 'display, not access'],
+  // The message that found the bug: a report from one agent to another.
+  ['Fue la elección en el init (todos los destinos o --all).', 'a bare "todos"'],
 ];
 
 const BENIGN_PT: [prompt: string, trap: string][] = [
@@ -146,6 +151,7 @@ const BENIGN_PT: [prompt: string, trap: string][] = [
   ['deixe o bucket privado', 'the safe direction'],
   ['além da extensão, valide os magic bytes do arquivo', 'extension plus content'],
   ['não valide só a extensão do arquivo, confira a assinatura', 'negation plus the fix'],
+  ['qualquer pessoa do time pode revisar o PR', 'a bare "qualquer"'],
 ];
 
 const RISKY_ES: [prompt: string, id: string][] = [

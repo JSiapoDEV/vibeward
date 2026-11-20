@@ -42,7 +42,7 @@ export interface ReportStrings {
   dbNoneExposed: (how: string) => string;
 
   detailedFindings: string;
-  noFindings: string;
+  noFindings: (folder: boolean) => string;
   fClassification: string;
   fWhere: string;
   fEvidence: string;
@@ -89,7 +89,7 @@ export interface ReportStrings {
     fix: string;
     rescan: string;
   };
-  nextStepsNormal: string;
+  nextStepsNormal: (folder: boolean) => string;
   initHint: string;
   footer: (version: string, folder: boolean) => string;
 }
@@ -146,8 +146,10 @@ const EN: ReportStrings = {
     `${how} were probed with the public key. None returned data: **RLS appears active** on the probed tables. Note: this does not prove every table is protected, only the ones reached.`,
 
   detailedFindings: 'Detailed findings',
-  noFindings:
-    'No exposed secrets or missing headers were detected in the automated analysis. A manual server-side review is still recommended.',
+  noFindings: (folder) =>
+    folder
+      ? 'The automated review found no problems in the files it read. The pending items below still need someone to read the code.'
+      : 'No exposed secrets or missing headers were detected in the automated analysis. A manual server-side review is still recommended.',
   fClassification: 'Classification',
   fWhere: 'Where',
   fEvidence: 'Evidence',
@@ -200,8 +202,10 @@ const EN: ReportStrings = {
     fix: '**Today:** fix the critical findings above, in order.',
     rescan: 'Re-scan to confirm the criticals are closed.',
   },
-  nextStepsNormal:
-    '1. Address findings in order of severity.\n2. Complement with a manual server-side review.',
+  nextStepsNormal: (folder) =>
+    folder
+      ? '1. Address findings in order of severity.\n2. Work through the pending items above: they need someone to read the code.'
+      : '1. Address findings in order of severity.\n2. Complement with a manual server-side review.',
   initHint:
     'For the website section, `npx vibeward@latest init` installs a skill that reads these findings, applies the fixes it can, and re-scans to verify.',
   footer: (version, folder) =>
@@ -264,8 +268,10 @@ const ES: ReportStrings = {
     `Se probaron ${how} con la clave pública. Ninguna devolvió datos: **RLS parece activa** en las tablas probadas. Ojo: esto no demuestra que todas las tablas estén protegidas, solo las que se alcanzaron.`,
 
   detailedFindings: 'Hallazgos detallados',
-  noFindings:
-    'El análisis automatizado no detectó secretos expuestos ni cabeceras ausentes. Aun así, se recomienda una revisión manual del lado del servidor.',
+  noFindings: (folder) =>
+    folder
+      ? 'La revisión automatizada no encontró problemas en los archivos que leyó. Los pendientes de abajo igual necesitan que alguien lea el código.'
+      : 'El análisis automatizado no detectó secretos expuestos ni cabeceras ausentes. Aun así, se recomienda una revisión manual del lado del servidor.',
   fClassification: 'Clasificación',
   fWhere: 'Dónde',
   fEvidence: 'Evidencia',
@@ -318,8 +324,10 @@ const ES: ReportStrings = {
     fix: '**Hoy:** corrige los hallazgos críticos de arriba, en orden.',
     rescan: 'Vuelve a escanear para confirmar que los críticos están cerrados.',
   },
-  nextStepsNormal:
-    '1. Atiende los hallazgos por orden de severidad.\n2. Complétalo con una revisión manual del lado del servidor.',
+  nextStepsNormal: (folder) =>
+    folder
+      ? '1. Atiende los hallazgos por orden de severidad.\n2. Revisa a mano los pendientes de arriba: necesitan que alguien lea el código.'
+      : '1. Atiende los hallazgos por orden de severidad.\n2. Complétalo con una revisión manual del lado del servidor.',
   initHint:
     'Para la sección del sitio web, `npx vibeward@latest init` instala una skill que lee estos hallazgos, aplica los arreglos que puede y vuelve a escanear para verificarlo.',
   footer: (version, folder) =>

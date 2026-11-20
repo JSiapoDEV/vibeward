@@ -30,10 +30,12 @@ export interface PendingItem {
   task: CoverageLine;
   /** Why it is worth the time. */
   why: CoverageLine;
-  /** The files it is about, capped; empty for platform and unchecked items. */
+  /**
+   * Every file it is about, most important first; empty for platform and unchecked items.
+   * The JSON carries them all — an agent works through the list. A report shows the first few
+   * and says how many more.
+   */
   files: string[];
-  /** How many files there were before the cap, when it cut some. */
-  total?: number;
 }
 
 /** The AI app builders whose own security scan a pending item can point at. */
@@ -56,7 +58,7 @@ export interface ReviewSignals {
   /** Server code that fetches a URL built from something other than a literal. */
   dynamicFetch: Set<string>;
   /** The server entry points that take an id from the request — where ownership matters. */
-  serverWithIds: Set<string>;
+  serverWithIds: Map<string, number>;
 }
 
 export function emptySignals(): ReviewSignals {
@@ -65,13 +67,13 @@ export function emptySignals(): ReviewSignals {
     htmlSinks: new Set(),
     serverEntry: new Set(),
     dynamicFetch: new Set(),
-    serverWithIds: new Set(),
+    serverWithIds: new Map(),
   };
 }
 
 /** Tests, fixtures and stories, where a sink or a fetch is the point of the file. */
 const NOT_APP_CODE =
-  /(^|[\\/])(test|tests|__tests__|__mocks__|spec|fixtures?|e2e|cypress|playwright|stories)[\\/]|\.(test|spec|stories)\.[jt]sx?$/i;
+  /(^|[\\/])(test|tests|__tests__|__mocks__|spec|fixtures?|e2e|cypress|playwright|stories)[\\/]|\.(test|spec|stories)\.[jt]sx?$|(^|[\\/])\.(?:claude|github|vscode|cursor|codex|agents|windsurf|opencode|gemini|idea)[\\/]/i;
 
 const HTML_SINK =
   /dangerouslySetInnerHTML|\bv-html\s*=|\{@html\s|\bset:html\s*=|\.(?:innerHTML|outerHTML)\s*=(?!=)|\binsertAdjacentHTML\s*\(|\bdocument\.write\s*\(/;
@@ -86,20 +88,33 @@ const SERVER_PATH =
   /(^|[\\/])supabase[\\/]functions[\\/][^\\/]+[\\/]index\.[jt]s$|(^|[\\/])app[\\/](?:.+[\\/])?route\.[jt]s$|(^|[\\/])pages[\\/]api[\\/].+\.[jt]s$/i;
 
 /** A file that registers routes itself: Express, Fastify, Hono, Koa routers and the like. */
+// `api.get('/x')` is not here: that is how a browser-side client calls a route, and it put
+// fourteen React hooks on a list of server entry points.
 const ROUTE_REGISTRATION =
-  /\b(?:app|router|server|fastify|api|routes?|hono|r)\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]\/|\.route\s*\(\s*\{[^}]*\burl\s*:|\bcreateRoute\s*\(/;
+  /\b(?:app|router|server|fastify|routes?|hono)\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]\/|\.route\s*\(\s*\{[^}]*\burl\s*:|\bcreateRoute\s*\(/;
+
+/** Code that runs in the browser by declaration. */
+const USE_CLIENT = /^\s*['"]use client['"]/m;
 
 /** Tools an MCP server exposes: each one is an entry point that takes its arguments from a model. */
+// By what the file defines, not by the folder it sits in: a folder named `tools/` listed every
+// helper next to the one file that registers the tools.
+// Also the tool definitions a chat model calls (OpenAI and Anthropic style): their arguments
+// come from a model reading user text, which makes them entry points like any route.
 const MCP_TOOL =
-  /\.(?:tool|registerTool)\s*\(\s*['"`][\w.-]+['"`]|(^|[\\/])(?:mcp|llm)[\\/](?:.+[\\/])?tools?[\\/]/;
+  /\.(?:tool|registerTool)\s*\(\s*['"`][\w.-]+['"`]|\b(?:input_schema|inputSchema)\s*:|\bname\s*:\s*['"`][\w-]+['"`][\s\S]{0,400}?\bparameters\s*:\s*\{\s*type\s*:\s*['"]object/;
 
 /** A route that takes an identifier from the request: `/:id`, `[id]`, `req.params`. */
+// A parameter that names a record: `:id`, `:cardId`, `req.params.userId`. `:ticker` or `:slug`
+// point at public things, and counting them put a stock-quote route among the ownership checks.
 const TAKES_ID =
-  /['"`][^'"`\n]*\/:\w+|\breq(?:uest)?\.params\b|\bc\.req\.param\s*\(|\bparams\.\w*[iI]d\b/;
+  /['"`][^'"`\n]*\/:\w*(?:id|Id|ID)\b|\breq(?:uest)?\.params\.\w*(?:id|Id|ID)\b|\bc\.req\.param\s*\(\s*['"`]\w*(?:id|Id|ID)['"`]|\bparams\.\w*[iI]d\b/;
 
 /** Code that escapes what it puts into HTML: the file has thought about it. */
+// A file that defines its own escaper — whatever it calls it, `escapar` included — is known by
+// what the escaper does: it turns `&` and `<` into entities.
 const HTML_ESCAPE =
-  /\bescapeHtml\s*\(|\bescapeHTML\s*\(|DOMPurify|sanitize-html|\bsanitizeHtml\s*\(|\bhe\.(?:encode|escape)\s*\(|from\s+['"]escape-html['"]/;
+  /\bescapeHtml\s*\(|\bescapeHTML\s*\(|DOMPurify|sanitize-html|\bsanitizeHtml\s*\(|\bhe\.(?:encode|escape)\s*\(|from\s+['"]escape-html['"]|['"`]&amp;['"`][\s\S]{0,120}['"`]&lt;['"`]|['"`]&lt;['"`][\s\S]{0,120}['"`]&amp;['"`]/;
 
 /**
  * Code with the contents of every template literal removed. A server file that builds an HTML
@@ -179,14 +194,17 @@ export function collectSignals(
     signals.htmlSinks.add(relPath);
   }
   const server =
-    SERVER_PATH.test(relPath) ||
-    USE_SERVER.test(content) ||
-    ROUTE_REGISTRATION.test(content) ||
-    MCP_TOOL.test(relPath) ||
-    MCP_TOOL.test(content);
+    !USE_CLIENT.test(content) &&
+    (SERVER_PATH.test(relPath) ||
+      USE_SERVER.test(content) ||
+      ROUTE_REGISTRATION.test(content) ||
+      MCP_TOOL.test(content));
   if (server) {
     signals.serverEntry.add(relPath);
-    if (TAKES_ID.test(content) || /\[[^\]]*id\]/i.test(relPath)) signals.serverWithIds.add(relPath);
+    // How many places in the file take an id: the files with the most come first.
+    const ids = [...content.matchAll(new RegExp(TAKES_ID.source, 'g'))].length;
+    if (ids > 0 || /\[[^\]]*id\]/i.test(relPath))
+      signals.serverWithIds.set(relPath, Math.max(ids, 1));
     const code = outsideTemplates(content);
     if (REQUEST_INPUT.test(code) && DYNAMIC_FETCH.test(code)) signals.dynamicFetch.add(relPath);
   }
@@ -250,13 +268,9 @@ const PLATFORM: Record<Builder, { task: CoverageLine; why: CoverageLine }> = {
 };
 
 /** The files to name and, when some were cut, how many there were — first ones first. */
-function listed(
-  all: Set<string>,
-  first: Set<string> = new Set(),
-): { files: string[]; total?: number } {
-  const ordered = [...[...first].sort(), ...[...all].filter((f) => !first.has(f)).sort()];
-  const files = ordered.slice(0, MAX_FILES);
-  return ordered.length > files.length ? { files, total: ordered.length } : { files };
+function listed(all: Set<string>, first: Map<string, number> = new Map()): { files: string[] } {
+  const ranked = [...first].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([f]) => f);
+  return { files: [...ranked, ...[...all].filter((f) => !first.has(f)).sort()] };
 }
 
 /** Review items from what a folder scan collected. */
@@ -434,17 +448,22 @@ export function builderPrompt(
     lines.push(t.promptReview);
     reviews.forEach((r, i) => {
       const files =
-        r.files.length > 0 ? ` ${t.files}: ${r.files.join(', ')}${moreText(r, lang)}` : '';
+        r.files.length > 0 ? ` ${t.files}: ${shownFiles(r).join(', ')}${moreText(r, lang)}` : '';
       lines.push(`${i + 1}. ${coverageText(r.task, lang)}${files}`);
     });
   }
   return lines.join('\n').trim();
 }
 
+/** The files a report names; the rest are counted, and the JSON carries them all. */
+export function shownFiles(item: PendingItem): string[] {
+  return item.files.slice(0, MAX_FILES);
+}
+
 /** ", and 18 more" when the list was cut. */
 export function moreText(item: PendingItem, lang: Lang): string {
-  if (!item.total || item.total <= item.files.length) return '';
-  const n = item.total - item.files.length;
+  const n = item.files.length - shownFiles(item).length;
+  if (n <= 0) return '';
   return lang === 'es' ? ` y ${n} más` : ` and ${n} more`;
 }
 
@@ -457,7 +476,9 @@ export function pendingMarkdown(findings: Finding[], items: PendingItem[], lang:
     md += `- [ ] **${t.kind[item.kind]}** — ${coverageText(item.task, lang)}\n`;
     md += `  ${coverageText(item.why, lang)}\n`;
     if (item.files.length > 0) {
-      md += `  ${t.files}: ${item.files.map((f) => `\`${f}\``).join(', ')}${moreText(item, lang)}\n`;
+      md += `  ${t.files}: ${shownFiles(item)
+        .map((f) => `\`${f}\``)
+        .join(', ')}${moreText(item, lang)}\n`;
     }
   }
   const prompt = builderPrompt(findings, items, lang);

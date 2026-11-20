@@ -31,10 +31,10 @@ No install, no API key, no Docker, no LLM call anywhere:
 
 ```bash
 # A deployed site, from the outside. --passive reads only public assets.
-npx vibeward@latest <url> --passive --json --stdout --out vibeward-report.md
+npx vibeward@latest <url> --passive --json --stdout --out .vibeward/reports/vibeward-report.md
 
 # The code, from the inside — secrets, committed .env, migrations without RLS.
-npx vibeward@latest scan <folder> --json --stdout --out vibeward-code-report.md
+npx vibeward@latest scan <folder> --json --stdout --out .vibeward/reports/vibeward-code-report.md
 ```
 
 `--stdout` puts the JSON payload on stdout and every human-facing line on stderr, so stdout
@@ -81,7 +81,7 @@ owns or is authorized to audit.**
 ```bash
 npm install
 npm run dev -- <url>     # run from source via tsx
-npm test                 # six suites, 1,114 assertions
+npm test                 # six suites, 1,163 assertions
 npm run lint             # eslint
 npm run typecheck        # tsc --noEmit, source and tests
 npm run format:check     # prettier

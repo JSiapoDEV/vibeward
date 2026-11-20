@@ -1,7 +1,7 @@
 # Measurement methodology
 
-vibeward publishes three numbers that reproduce from this repository: **1,114 assertions**, **0
-false positives on 46 benign documents**, **0 false positives on 99 benign prompts across three
+vibeward publishes three numbers that reproduce from this repository: **1,163 assertions**, **0
+false positives on 46 benign documents**, **0 false positives on 103 benign prompts across three
 languages**. A fourth — **30 of 31 real apps scanned without a crash** — does not reproduce from
 anything, and is kept out of this list on purpose; §6 gives it in full and says why nobody but the
 author can check it. A number in a README is not evidence. This document is the procedure behind
@@ -18,7 +18,7 @@ Only the first is measured here. Everything below is a statement about inputs in
 rules in `src/`, and about one scan of thirty-one real sites run in a mode that deliberately
 looked at less than half of what matters. None of it is a statement about the security of any app.
 
-Every figure below was produced by running `npm test` on the tagged commit for **v0.8.1**
+Every figure below was produced by running `npm test` on the tagged commit for **v0.8.2**
 (`src/core/version.ts:2`, released `2026-11-20`). Where a number could not be re-derived from the
 code, it is marked as such rather than repeated.
 
@@ -107,10 +107,10 @@ reading `src/` rather than the README.
 
 | Unit                                      | Count  | Where                                                |
 | ----------------------------------------- | ------ | ---------------------------------------------------- |
-| Distinct static security finding ids      | **32** | `src/checks/*.ts`, excluding `web_*`, injection and intent |
-| Dynamic id families (id built per target) | **19** | e.g. `rls_exposed_*`, `dynamic_sql_*`, `rpc_runs_sql_*` |
+| Distinct static security finding ids      | **31** | `src/checks/*.ts`, excluding `web_*`, injection and intent |
+| Dynamic id families (id built per target) | **20** | e.g. `rls_exposed_*`, `dynamic_sql_*`, `rpc_runs_sql_*` |
 | Secret patterns in the table              | **16** | `src/checks/secrets.ts:63`–`:406`                    |
-| Additional secret pass (bearer literals)  | **1**  | `src/checks/secrets.ts:466`                          |
+| Additional secret pass (bearer literals)  | **1**  | `src/checks/secrets.ts:471`                          |
 | Expected security headers                 | **4**  | `src/checks/headers.ts:16`                           |
 | Website checks (`web_*`)                  | **19** | `src/checks/web.ts:515`–`:567`, enumerated literally |
 | Intent rules (the prompt moment)          | **9**  | `src/checks/intent.ts:91`–`:245`                     |
@@ -120,17 +120,17 @@ reading `src/` rather than the README.
 | Guardrail languages                       | **3**  | en / es / pt, `src/checks/lexicon.ts:18`             |
 | Verb roles per language                   | **6**  | `weaken`, `expose`, `place`, `ship`, `emit`, `allow` |
 
-**How the "32" is derived, exactly.** `grep -rho "id: '[^']*'" src/checks/*.ts | sort -u` returns
-**64** distinct id literals. Three sets come out of it, because they are counted on their own rows
+**How the "31" is derived, exactly.** `grep -rho "id: '[^']*'" src/checks/*.ts | sort -u` returns
+**63** distinct id literals. Three sets come out of it, because they are counted on their own rows
 above: the 19 `web_*` ids, the 4 `injection-*` ids, and the 9 intent ids (`disable-rls`,
 `service-role-client`, `make-public`, `remove-auth`, `cors-wildcard`, `hardcode-secret`,
-`disable-security`, `commit-env`, `upload-type-by-name`). 64 − 19 − 4 − 9 = **32**. Counting file by file instead gives
-33, because `security_definer` is declared in two files; the census counts distinct ids, not
-declarations. The 19 dynamic families are the lines `grep -rn 'id: `' src/checks/*.ts` prints;
+`disable-security`, `commit-env`, `upload-type-by-name`). 63 − 19 − 4 − 9 = **31**. Counting file by file instead gives
+32, because `security_definer` is declared in two files; the census counts distinct ids, not
+declarations. The 20 dynamic families are the lines `grep -rn 'id: `' src/checks/*.ts` prints;
 `rls_disabled_*` is built in two of them (migrations and the live probe), so the distinct prefixes
-are 18. The filter anchors on the opening quote: `firebase_web_api_key` contains `web_` and is a
-security id. `git_history_*` ids are built in `src/scanners/history.ts`, outside `src/checks`, one per
-secret rule, and are not in either count.
+are 19 (`firebase_<platform>_api_key` is one of them, built per platform: web, Android, iOS). `git_history_*` ids are built in `src/scanners/history.ts`, outside `src/checks`, one per
+secret rule, and are not in either count; neither are the two ids `src/scanners/folder.ts` builds
+for what an older vibeward left in a project (`vibeward_report_in_tree_*`, `vibeward_guard_outdated`).
 
 **On the figure "25 security rules."** `README.md:46` says 25, and that number is the **25-point
 security checklist the reports cite by number** through the `check` field on a finding
@@ -179,13 +179,13 @@ figure is their sum.
 
 | Suite                    | Assertions | What it holds                                                            |
 | ------------------------ | ---------- | ------------------------------------------------------------------------ |
-| `test/self-test.ts`      | **577**    | Detection logic over synthetic inputs, 46 sections, no external calls    |
+| `test/self-test.ts`      | **611**    | Detection logic over synthetic inputs, 51 sections, no external calls    |
 | `test/prompt-test.ts`    | **12**     | Interactive selectors driven through a fake TTY, terminal state restored |
-| `test/intent-test.ts`    | **166**    | The prompt gate, en + es + pt                                            |
+| `test/intent-test.ts`    | **170**    | The prompt gate, en + es + pt                                            |
 | `test/injection-test.ts` | **83**     | The content gate                                                         |
-| `test/hosts-test.ts`     | **205**    | One golden payload per editor, per moment, the guard levels and the end-of-turn summary, plus adversarial regressions |
-| `test/contract-test.ts`  | **71**     | The promises in §1.2, asserted                                           |
-| **Total**                | **1,114**  |                                                                          |
+| `test/hosts-test.ts`     | **208**    | One golden payload per editor, per moment, the guard levels and the end-of-turn summary, plus adversarial regressions |
+| `test/contract-test.ts`  | **79**     | The promises in §1.2, asserted                                           |
+| **Total**                | **1,163**  |                                                                          |
 
 `test/self-test.ts:1` states its own boundary: _"Self-test with SYNTHETIC data (no real secrets).
 Validates detection logic without touching any external system."_ No suite touches an external
@@ -226,25 +226,25 @@ Examples, with the label the file carries:
 
 Twelve of the 46 are enumerations added in v0.6.1 and v0.6.2; see §5.
 
-### 3.4 The intent-gate corpus — 0 false positives over 99 entries
+### 3.4 The intent-gate corpus — 0 false positives over 103 entries
 
 `test/intent-test.ts` holds ten arrays. Five feed the false-positive denominator and five measure
 recall:
 
 | Array             | Line   | Entries | In the FP denominator |
 | ----------------- | ------ | ------- | --------------------- |
-| `BENIGN` (en)     | `:22`  | **48**  | yes                   |
-| `BENIGN_ES`       | `:113` | **19**  | yes                   |
-| `BENIGN_PT`       | `:135` | **13**  | yes                   |
-| `CROSS_LANGUAGE`  | `:189` | **14**  | yes                   |
-| `BENIGN_MULTI`    | `:243` | **5**   | yes                   |
-| `RISKY` (en)      | `:78`  | **27**  | no — recall           |
-| `RISKY_ES`        | `:151` | **14**  | no — recall           |
-| `RISKY_PT`        | `:168` | **11**  | no — recall           |
-| `NOT_A_FREE_PASS` | `:211` | **5**   | no — recall           |
-| `BYPASS`          | `:226` | **10**  | no — recall           |
+| `BENIGN` (en)     | `:22`  | **50**  | yes                   |
+| `BENIGN_ES`       | `:116` | **20**  | yes                   |
+| `BENIGN_PT`       | `:140` | **14**  | yes                   |
+| `CROSS_LANGUAGE`  | `:195` | **14**  | yes                   |
+| `BENIGN_MULTI`    | `:249` | **5**   | yes                   |
+| `RISKY` (en)      | `:81`  | **27**  | no — recall           |
+| `RISKY_ES`        | `:157` | **14**  | no — recall           |
+| `RISKY_PT`        | `:174` | **11**  | no — recall           |
+| `NOT_A_FREE_PASS` | `:217` | **5**   | no — recall           |
+| `BYPASS`          | `:232` | **10**  | no — recall           |
 
-48 + 19 + 13 + 14 + 5 = **99** benign; 27 + 14 + 11 + 5 + 10 = **67** risky; total **166**.
+50 + 20 + 14 + 14 + 5 = **103** benign; 27 + 14 + 11 + 5 + 10 = **67** risky; total **170**.
 
 Four of these arrays exist because of a specific failure, and each carries the failure in its
 docblock:
@@ -271,10 +271,10 @@ the loop over `BENIGN`. A false positive is `hits.length > 0` on an entry that a
 benign. The `RISKY`, `EVASION` and `HIDDEN` loops assert detection and never touch the counters.
 The suite prints `False positives: 0/46`.
 
-**Intent gate** — `test/intent-test.ts:257` (`benignSuite`) and `:283` (the `CROSS_LANGUAGE`
-loop) are the only two places `total` and `fp` move. `riskySuite` (`:267`) asserts the expected
+**Intent gate** — `test/intent-test.ts:263` (`benignSuite`) and `:289` (the `CROSS_LANGUAGE`
+loop) are the only two places `total` and `fp` move. `riskySuite` (`:273`) asserts the expected
 rule id fired and never touches them. The suite prints
-`False positives: 0/99 across en + es + pt`.
+`False positives: 0/103 across en + es + pt`.
 
 Recall is asserted per entry, not reported as a rate: a risky entry names the rule id it must
 produce, and the assertion fails if that id is absent. There is no aggregate recall percentage
@@ -287,7 +287,7 @@ It means: **on this corpus, on this commit, no entry marked benign produced a fi
 
 It does not mean any of the following, and no reading of the number should suggest them:
 
-- **It is not a false-positive rate for your inputs.** The denominators are 46 documents and 99
+- **It is not a false-positive rate for your inputs.** The denominators are 46 documents and 103
   prompts, hand-written by the maintainer. That is a small, non-random, adversarially curated
   sample of a space that is effectively infinite. A rate over it has no confidence interval and
   no population behind it.
@@ -308,7 +308,7 @@ It does not mean any of the following, and no reading of the number should sugge
   still the right assertion to make — a regression is meant to break the build — but it should be
   read as a gate, not as a gauge.
 
-The honest one-line form of the claim is: _"on 46 benign documents and 99 benign prompts in the
+The honest one-line form of the claim is: _"on 46 benign documents and 103 benign prompts in the
 repository, zero fired, and the build would not be green otherwise."_ That is what this document
 supports. Anything broader is not measured.
 
@@ -523,7 +523,7 @@ _class_. The benign corpus went from 41 to 46 for this, and the count is in §2.
 This is the only measurement in this project taken against systems the maintainer does not own.
 It is reported with its method and its limits because the limits are larger than the result.
 
-**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.8.1. Treat the
+**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.8.2. Treat the
 figures as historical.
 
 **Method.** A scan has two layers with very different sensitivity:
@@ -586,7 +586,7 @@ itself (§3.2).
 ```bash
 git clone https://github.com/JSiapoDEV/vibeward
 cd vibeward
-git checkout v0.8.1     # every figure below is from this tag, not from HEAD
+git checkout v0.8.2     # every figure below is from this tag, not from HEAD
 npm ci
 npm test
 ```
@@ -598,19 +598,19 @@ not. If you skip it and a total differs, the tag is what this document describes
 precision figures are printed by the suites themselves:
 
 ```
-False positives: 0/99 across en + es + pt      # test/intent-test.ts
+False positives: 0/103 across en + es + pt     # test/intent-test.ts
 False positives: 0/46                          # test/injection-test.ts
 ```
 
 To run one suite on its own:
 
 ```bash
-npx tsx test/self-test.ts        # 577
+npx tsx test/self-test.ts        # 611
 npx tsx test/prompt-test.ts      #  12
-npx tsx test/intent-test.ts      # 166
+npx tsx test/intent-test.ts      # 170
 npx tsx test/injection-test.ts   #  83
-npx tsx test/hosts-test.ts       # 205
-npx tsx test/contract-test.ts    #  71
+npx tsx test/hosts-test.ts       # 208
+npx tsx test/contract-test.ts    #  79
 ```
 
 To count every corpus array yourself, rather than taking §3.3 and §3.4 on trust — save this as
@@ -626,15 +626,15 @@ for (const file of ['test/injection-test.ts', 'test/intent-test.ts']) {
 }
 ```
 
-It prints the fourteen arrays and their sizes: 46 / 22 / 4 / 3 for the content gate, and 48 / 27 /
-19 / 13 / 14 / 11 / 14 / 5 / 10 / 5 for the intent gate.
+It prints the fourteen arrays and their sizes: 46 / 22 / 4 / 3 for the content gate, and 50 / 27 /
+20 / 14 / 14 / 11 / 14 / 5 / 10 / 5 for the intent gate.
 
 To check the rule census in §2:
 
 ```bash
-# 64 distinct id literals in total:
+# 63 distinct id literals in total:
 grep -rho "id: '[^']*'" src/checks/*.ts | sort -u | wc -l
-# the 32 static security ids — web, injection and intent removed, since §2 counts those
+# the 31 static security ids — web, injection and intent removed, since §2 counts those
 # on their own rows:
 grep -rho "id: '[^']*'" src/checks/*.ts | sort -u \
   | grep -Ev "'web_|'injection-|'disable-rls'|'service-role-client'|'make-public'|'remove-auth'|'cors-wildcard'|'hardcode-secret'|'disable-security'|'commit-env'|'upload-type-by-name'" \

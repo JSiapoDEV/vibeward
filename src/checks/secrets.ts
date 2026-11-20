@@ -667,8 +667,17 @@ const FIREBASE_WINDOW = 600;
 
 /** Which Firebase app a Google key belongs to, from the config around it; null when none. */
 function firebasePlatform(text: string, index: number, length: number): FirebasePlatform | null {
+  // The two mobile config files are recognised whole: in a google-services.json with OAuth
+  // clients the key can sit 700 characters from its app id, past any window worth using.
+  if (/"project_info"\s*:/.test(text) && /"client_info"\s*:/.test(text)) return 'android';
+  if (/<key>GOOGLE_APP_ID<\/key>/.test(text)) return 'ios';
   const around = text.slice(Math.max(0, index - FIREBASE_WINDOW), index + length + FIREBASE_WINDOW);
   if (!FIREBASE_CONTEXT.test(around)) return null;
+  // A file that holds every platform's options (Flutter's firebase_options.dart) puts each key
+  // right before its own `appId: '1:…:android:…'`. The first app id after the key names it; the
+  // window alone would see the neighbouring platform too.
+  const next = /\b1:\d+:(android|ios|web):/.exec(text.slice(index, index + length + 300))?.[1];
+  if (next === 'android' || next === 'ios' || next === 'web') return next;
   if (/mobilesdk_app_id|:android:|"client_info"/.test(around)) return 'android';
   if (/GOOGLE_APP_ID|BUNDLE_ID|:ios:/.test(around)) return 'ios';
   return 'web';
@@ -720,6 +729,7 @@ function* matchSecrets(text: string): Generator<RawMatch> {
 export const SECRET_IDS = new Set<string>([
   ...SECRET_PATTERNS.map((p) => p.id),
   ...Object.values(FIREBASE_KEYS).map((p) => p.id),
+  'google_browser_api_key',
   'hardcoded_bearer',
 ]);
 
@@ -755,12 +765,18 @@ export function mergeRepeatedSecrets(findings: Finding[]): Finding[] {
     if (others.length === 0) continue;
     const shown = others.slice(0, 3).map((s) => s.replace(/^https?:\/\/[^/]+/, ''));
     const more = others.length > 3 ? ` +${others.length - 3}` : '';
-    finding.evidence = `${finding.evidence} — also in ${shown.join(', ')}${more}`;
+    const base = finding.evidence ?? '';
+    finding.evidence = `${base} — also in ${shown.join(', ')}${more}`;
     if (finding.es) {
-      finding.es = {
-        ...finding.es,
-        evidence: `${finding.evidence.split(' — also in ')[0]} — también en ${shown.join(', ')}${more}`,
-      };
+      finding.es = { ...finding.es, evidence: `${base} — también en ${shown.join(', ')}${more}` };
+    }
+    // One web key served by several apps needs every one of their domains in its referrer
+    // restriction; the one left out stops signing in the moment the restriction is saved.
+    if (finding.id === 'firebase_web_api_key') {
+      finding.why = `${finding.why} It appears in ${others.length + 1} places: put the domain of every app that serves it in the referrer restriction, or sign-in breaks in the one you leave out.`;
+      if (finding.es?.why) {
+        finding.es.why = `${finding.es.why} Aparece en ${others.length + 1} lugares: pon en la restricción por referente el dominio de cada app que la sirve, o el inicio de sesión dejará de funcionar en la que olvides.`;
+      }
     }
   }
   return out;
@@ -866,6 +882,52 @@ export function extractSupabaseConfig(text: string): SupabaseConfig | null {
 }
 
 /**
+ * Env names a bundler copies into the JavaScript the browser downloads. A key under one of them
+ * is public in production however carefully the `.env` itself is ignored.
+ */
+export const BROWSER_ENV_PREFIX =
+  /^\s*(?:export\s+)?(?:NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_|GATSBY_|NUXT_PUBLIC_|VUE_APP_)/;
+
+/**
+ * A key in an ignored `.env` under a browser prefix (`VITE_…`). It was going to be called
+ * "local, not leaked" — and it ships in every build. A Google key there is the Maps or Places
+ * key a page needs, public by design and only safe restricted; anything else is a secret that
+ * reached the browser, at its own rule's severity.
+ */
+export function asBrowserBound(f: Finding): Finding {
+  if (f.id === 'google_api_key') {
+    return {
+      ...f,
+      id: 'google_browser_api_key',
+      severity: 'low',
+      label: 'Google API key for the browser — confirm it is restricted',
+      exploit:
+        'The variable has a browser prefix, so the bundler puts the key in the JavaScript every visitor downloads. That is how a Maps or Places key works — and unrestricted, anyone can use it against any Google API enabled in the project, paid ones included.',
+      why: 'In Google Cloud Console → Credentials, restrict it to your sites (HTTP referrers) and to the APIs the page uses (Maps JavaScript, Places…). Rotating it changes nothing: the new one ships the same way.',
+      es: {
+        ...f.es,
+        label: 'Clave de Google para el navegador — confirma que esté restringida',
+        exploit:
+          'La variable tiene un prefijo de navegador, así que el bundler pone la clave en el JavaScript que descarga cada visitante. Así funciona una clave de Maps o Places, y sin restricciones cualquiera puede usarla contra cualquier API de Google activada en el proyecto, incluidas las de pago.',
+        why: 'En Google Cloud Console → Credenciales, restríngela a tus sitios (referentes HTTP) y a las APIs que usa la página (Maps JavaScript, Places…). Rotarla no cambia nada: la nueva viaja igual.',
+      },
+    };
+  }
+  return {
+    ...f,
+    label: `${f.label} — under a browser prefix, it ships in the build`,
+    exploit:
+      `The variable has a browser prefix, so the bundler copies the value into the JavaScript every visitor downloads, even though the .env file is ignored. ${f.exploit ?? ''}`.trim(),
+    es: {
+      ...f.es,
+      label: `${f.es?.label ?? f.label} — con prefijo de navegador, viaja en el build`,
+      exploit:
+        `La variable tiene un prefijo de navegador, así que el bundler copia el valor en el JavaScript que descarga cada visitante, aunque el .env esté ignorado. ${f.es?.exploit ?? ''}`.trim(),
+    },
+  };
+}
+
+/**
  * A key in a file git ignores and has never committed: on this machine, not in the repository.
  *
  * It is still a live key, and worth deleting if nothing uses it — but calling it critical next
@@ -884,7 +946,7 @@ export function asLocalOnly(f: Finding): Finding {
       ...f.es,
       label: `${f.es?.label ?? f.label} — en un archivo que git ignora`,
       exploit:
-        'Git ignora este archivo y nunca se subió a git, así que la clave no se filtró. Puede seguir funcionando, en esta máquina y en sus copias de seguridad.',
+        'Este archivo está fuera de git y nunca se subió, así que la clave no se filtró. Puede seguir funcionando, en esta máquina y en sus copias de seguridad.',
       why: 'Si la app ya no la usa, bórrala del archivo y anúlala en el proveedor. Si la usa, déjala aquí: es su lugar.',
     },
   };
