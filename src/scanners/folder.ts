@@ -8,6 +8,8 @@ import { analyzeMigrations } from '../checks/migrations.js';
 import { finish, loadSupabaseExport } from '../reporters/output.js';
 import { C, log } from '../core/terminal.js';
 import { AREA, ledger } from '../core/coverage.js';
+import { coverage } from '../core/i18n.js';
+import { HISTORY_MAX_COMMITS, onlyDeleted, scanHistory } from './history.js';
 import {
   buildPending,
   builderFromFile,
@@ -331,6 +333,10 @@ export function folderCoverage(input: {
   return cov.entries();
 }
 
+function entry(id: string, status: CoverageEntry['status'], en: string, es: string): CoverageEntry {
+  return { id, status, detail: coverage(en, es) };
+}
+
 /** White-box: scan a local folder (code + Supabase migrations) plus an optional export. */
 export function runFolderScan(dir: string, args: Args): never {
   log(`${C.gray}▸ Scanning folder ${dir}…${C.reset}`);
@@ -349,6 +355,64 @@ export function runFolderScan(dir: string, args: Args): never {
     supabaseContext,
     supabaseExport: Boolean(args.supabaseJson),
   });
+
+  // The history is read only when asked: on a large repository it is the slow part, and it
+  // reads every branch rather than the folder in front of the person.
+  if (args.history) {
+    log(`${C.gray}▸ Reading the git history…${C.reset}`);
+    const history = scanHistory(dir);
+    if (!history) {
+      scanned.push(
+        entry(
+          AREA.gitHistory,
+          'not_applicable',
+          'not a git repository',
+          'no es un repositorio de git',
+        ),
+      );
+    } else {
+      findings.push(...onlyDeleted(history.findings, findings));
+      log(`${C.gray}▸ ${history.commits} commit(s) read${C.reset}`);
+      if (history.shallow) {
+        scanned.push(
+          entry(
+            AREA.gitHistory,
+            'not_evaluated',
+            `a shallow clone: only ${history.commits} commit(s) are on this machine. In GitHub Actions, check out with fetch-depth: 0`,
+            `un clon superficial: en esta máquina solo hay ${history.commits} commit(s). En GitHub Actions, haz el checkout con fetch-depth: 0`,
+          ),
+        );
+      } else {
+        scanned.push(
+          entry(
+            AREA.gitHistory,
+            'checked',
+            `Keys added in ${history.commits} commit(s) across every branch and tag, deleted since`,
+            `Claves agregadas en ${history.commits} commit(s) de todas las ramas y tags, y borradas después`,
+          ),
+        );
+        if (history.capped) {
+          scanned.push(
+            entry(
+              AREA.gitHistory,
+              'not_evaluated',
+              `commits older than the newest ${HISTORY_MAX_COMMITS} were not read`,
+              `no se leyeron los commits anteriores a los ${HISTORY_MAX_COMMITS} más recientes`,
+            ),
+          );
+        }
+      }
+    }
+  } else if (gitView(dir)) {
+    scanned.push(
+      entry(
+        AREA.gitHistory,
+        'not_evaluated',
+        'the git history was not read: a key deleted from the code is still in the commit that added it. Run with --history to cover it',
+        'no se leyó el historial de git: una clave borrada del código sigue en el commit que la agregó. Ejecútalo con --history para cubrirlo',
+      ),
+    );
+  }
 
   const pending = buildPending({
     scanned,

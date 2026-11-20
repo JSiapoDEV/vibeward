@@ -31,6 +31,8 @@ export interface Args {
   summary?: string;
   /** The summary will be public: count findings, never name or place them. */
   publicSummary?: boolean;
+  /** `scan` only: also read every branch and tag for keys deleted since. */
+  history?: boolean;
   yes?: boolean;
   out?: string;
   date?: string;
@@ -70,6 +72,7 @@ export function parseArgs(argv: string[]): Args {
     else if (a === '--sarif') args.sarif = argv[++i];
     else if (a === '--summary') args.summary = argv[++i];
     else if (a === '--public-summary') args.publicSummary = true;
+    else if (a === '--history') args.history = true;
     else if (a === '--out') args.out = argv[++i];
     else if (a === '--date') args.date = argv[++i];
     else if (a === '--lang') {

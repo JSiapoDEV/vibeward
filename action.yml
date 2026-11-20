@@ -25,6 +25,10 @@ inputs:
     description: 'Language of the summary, the issue and the report: en or es'
     required: false
     default: 'en'
+  history:
+    description: 'Also read every branch and tag for keys that were deleted but are still in git. Needs `fetch-depth: 0` on actions/checkout.'
+    required: false
+    default: 'false'
   issue:
     description: 'Keep one open issue with what is pending, updated on each push to the default branch and closed when nothing is left. Needs `issues: write`.'
     required: false
@@ -57,6 +61,7 @@ runs:
         SUPABASE_EXPORT: ${{ inputs.supabase }}
         FAIL_ON_CRITICAL: ${{ inputs.fail-on-critical }}
         REPORT_LANG: ${{ inputs.lang }}
+        SCAN_HISTORY: ${{ inputs.history }}
         # Unknown counts as public: naming a finding where anyone can read it is the mistake
         # this has to avoid, and counting one where only the owner reads it costs little.
         REPO_PRIVATE: ${{ github.event.repository.private }}
@@ -67,6 +72,7 @@ runs:
           set -- "$SCAN_URL" --sarif .vibeward/ci/vibeward.sarif --yes
         else
           set -- scan "$SCAN_PATH" --sarif .vibeward/ci/vibeward.sarif --yes
+          if [ "$SCAN_HISTORY" = "true" ]; then set -- "$@" --history; fi
         fi
         if [ -n "$SUPABASE_EXPORT" ]; then set -- "$@" --supabase "$SUPABASE_EXPORT"; fi
         set -- "$@" --lang "$REPORT_LANG" --summary .vibeward/ci/summary.md

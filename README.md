@@ -591,6 +591,7 @@ npm i -D playwright && npx playwright install chromium
 | `--supabase-url <url>` / `--anon-key <key>` | URL mode: Supabase config if not auto-detected |
 | `--no-rls` | URL mode: skip the Row-Level Security probe |
 | `--sarif <file>` | Write SARIF 2.1.0 (for GitHub code scanning) — security findings only |
+| `--history` | `scan` only: also read every branch and tag for keys that were deleted but are still in a commit |
 | `--summary <file>` | Write the CI summary: counts, what to fix, pending items, the builder prompt |
 | `--public-summary` | The summary will be public: count findings, never name or place them |
 | `--lang <en\|es>` | Report language, English by default. The CLI itself stays English |
@@ -649,7 +650,9 @@ counts findings without naming them or saying where they are, and points to the 
 which only people with write access can open.
 
 The job fails on a critical finding (set `fail-on-critical: 'false'` to report without gating,
-or `issue: 'false'` to skip the issue).
+or `issue: 'false'` to skip the issue). Add `history: 'true'` to also read every branch and tag
+for keys that were deleted but are still in git; it needs the full history, so check out with
+`fetch-depth: 0`.
 
 ## Development
 

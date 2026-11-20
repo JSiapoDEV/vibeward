@@ -45,6 +45,9 @@ function usage(): void {
     `  vibeward scan <folder> [--supabase export.json] [--sarif f]            white-box code scan`,
   );
   log(
+    `${C.dim}      --history: also read every branch and tag for keys that were deleted but are still in git${C.reset}`,
+  );
+  log(
     `  vibeward init [--scope project|user] [--targets a,b] [--moments a,b]   install the skill + guard`,
   );
   log(

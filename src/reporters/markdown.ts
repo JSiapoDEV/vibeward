@@ -73,7 +73,9 @@ const TRUST_TEXT = {
 function criticalSteps(findings: Finding[], s: ReportStrings['steps']): string {
   const critical = findings.filter((f) => f.severity === 'critical');
   const steps: string[] = [];
-  const secret = critical.filter((f) => SECRET_IDS.has(f.id) || f.id.startsWith('data_'));
+  const secret = critical.filter(
+    (f) => SECRET_IDS.has(f.id) || f.id.startsWith('data_') || f.id.startsWith('git_history_'),
+  );
   if (secret.length > 0) steps.push(s.rotate);
   if (
     critical.some((f) =>

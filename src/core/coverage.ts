@@ -71,6 +71,8 @@ export const AREA = {
   supabaseExport: 'supabase_export',
   /** Secrets and committed environment files in the source tree. */
   sourceSecrets: 'source_secrets',
+  /** Keys deleted from the tree but still in a commit on some branch or tag. */
+  gitHistory: 'git_history',
   /** Server-side authorization and framework configuration in the source tree. */
   backendAuthz: 'backend_authz',
   /** File uploads checked by name or declared type instead of by their content (magic bytes). */

@@ -59,6 +59,7 @@ import { ciSummary } from '../src/reporters/ci.js';
 import { checkCookies, checkMixedContent } from '../src/checks/browser.js';
 import { asLocalOnly, mergeRepeatedSecrets } from '../src/checks/secrets.js';
 import { gitView } from '../src/scanners/folder.js';
+import { historyFindings, onlyDeleted, parseLog, scanHistory } from '../src/scanners/history.js';
 import { spawnSync } from 'node:child_process';
 import { symlinkSync } from 'node:fs';
 import { redirectTarget } from '../src/http/crawl.js';
@@ -3351,6 +3352,101 @@ console.log('\n45. A folder scan of a real repository — what git sees, and wha
     /turn RLS on/.test(rlsOnly) && !/rotate every/.test(rlsOnly),
     'and one whose critical is RLS is not told to rotate keys',
   );
+}
+
+console.log('\n46. --history — a deleted key is still in the commit that added it');
+{
+  const openai = ['sk-', 'proj-', 'Fake'.repeat(10)].join('');
+  const other = ['sk-', 'proj-', 'Diff'.repeat(10)].join('');
+  // Parsing: only added lines count, per file, per commit.
+  const log = [
+    '\u0001bbbbbbb 2026-11-02',
+    '+++ b/src/pay.ts',
+    '+const k = process.env.KEY;',
+    '-const k = "' + openai + '";',
+    '\u0001aaaaaaa 2026-11-01',
+    '+++ b/src/pay.ts',
+    '+const k = "' + openai + '";',
+    '+++ /dev/null',
+    '+ignored',
+  ].join('\n');
+  const parsed = parseLog(log);
+  assert(parsed.commits === 2 && parsed.hunks.length === 2, 'commits and files are split');
+  assert(
+    !parsed.hunks.some((h) => h.added.some((l) => l.includes('ignored'))),
+    'a deleted file adds nothing',
+  );
+  const found = historyFindings(parsed.hunks);
+  assert(
+    found.length === 1 && found[0]!.id === 'git_history_openai_key',
+    'the removal is not mistaken for a leak',
+  );
+  assert(
+    found[0]!.source === 'src/pay.ts @ aaaaaaa (2026-11-01)',
+    'the commit that introduced the key is named',
+  );
+  assert(
+    /Rotate the key/.test(found[0]!.why) && /Rota la clave/.test(found[0]!.es?.why ?? ''),
+    'the fix is rotation, in both languages',
+  );
+
+  const generic = historyFindings(
+    parseLog(
+      '\u0001ccccccc 2026-11-03\n+++ b/a.ts\n+const conf = { secret: "q8Zt3vK1mN5pR7wX2yB4" };',
+    ).hunks,
+  );
+  assert(generic.length === 0, 'the generic api_key rule is left out of the history');
+
+  const current = scanSource(`OPENAI_API_KEY=${openai}`, '.env');
+  assert(onlyDeleted(found, current).length === 0, 'a key still in the tree is not reported twice');
+  assert(onlyDeleted(found, []).length === 1, 'a key no longer in the tree is reported');
+
+  // A real repository: a key deleted on main, one on an unmerged branch, one still present.
+  const repo = mkdtempSync(join(tmpdir(), 'vw-hist-'));
+  const git = (cwd: string, ...a: string[]) =>
+    spawnSync('git', ['-C', cwd, '-c', 'user.email=t@t.test', '-c', 'user.name=t', ...a], {
+      encoding: 'utf8',
+    });
+  if (git(repo, 'init', '-q', '-b', 'main').status === 0) {
+    mkdirSync(join(repo, 'src'));
+    writeFileSync(join(repo, 'src', 'pay.ts'), `const k = "${openai}";\n`);
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'add');
+    git(repo, 'tag', 'v1');
+    writeFileSync(join(repo, 'src', 'pay.ts'), 'const k = process.env.KEY;\n');
+    git(repo, 'commit', '-qam', 'move to env');
+    git(repo, 'switch', '-qc', 'feature');
+    writeFileSync(join(repo, 'src', 'other.ts'), `const k = "${other}";\n`);
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'feature');
+    git(repo, 'switch', '-q', 'main');
+
+    const h = scanHistory(repo)!;
+    assert(h.commits === 3 && !h.shallow && !h.capped, 'every commit on every branch is read');
+    assert(
+      h.findings.length === 2,
+      'the key deleted on main and the one on the unmerged branch are both found',
+    );
+    assert(
+      h.findings.some((f) => f.source?.startsWith('src/other.ts @')),
+      'including the branch nobody merged',
+    );
+    assert(scanHistory(repo, 1)!.capped, 'a cap on commits is said, not hidden');
+
+    const shallow = mkdtempSync(join(tmpdir(), 'vw-shallow-'));
+    spawnSync('git', ['clone', '-q', '--depth', '1', `file://${repo}`, shallow], {
+      encoding: 'utf8',
+    });
+    assert(
+      scanHistory(shallow)?.shallow === true,
+      'a shallow clone is recognised, so the report can say so',
+    );
+    rmSync(shallow, { recursive: true, force: true });
+  }
+  rmSync(repo, { recursive: true, force: true });
+  const notRepo = mkdtempSync(join(tmpdir(), 'vw-norepo-'));
+  assert(scanHistory(notRepo) === null, 'outside a repository there is no history to read');
+  rmSync(notRepo, { recursive: true, force: true });
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);
