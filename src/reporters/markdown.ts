@@ -1,5 +1,7 @@
 import { pendingMarkdown, type PendingItem } from '../core/pending.js';
 import type { TrustCenter } from '../checks/trust.js';
+import { SECRET_IDS } from '../checks/secrets.js';
+import type { ReportStrings } from './strings.js';
 import { isWeb } from '../core/types.js';
 import type { Finding, Severity, SuppressedFinding } from '../core/types.js';
 import { coverage, coverageText } from '../core/i18n.js';
@@ -62,6 +64,30 @@ const TRUST_TEXT = {
     listed: 'Publicados como cumplidos',
   },
 };
+
+/**
+ * Next steps built from the criticals actually found. A fixed list told a project with no
+ * Supabase to "enable RLS on the exposed tables", and someone following the steps in order
+ * goes looking for tables that do not exist before getting to the key that does.
+ */
+function criticalSteps(findings: Finding[], s: ReportStrings['steps']): string {
+  const critical = findings.filter((f) => f.severity === 'critical');
+  const steps: string[] = [];
+  const secret = critical.filter((f) => SECRET_IDS.has(f.id) || f.id.startsWith('data_'));
+  if (secret.length > 0) steps.push(s.rotate);
+  if (
+    critical.some((f) =>
+      /^(rls_|permissive_policy|policy_dropped_|grant_anon_|view_|dynamic_sql_|rpc_)/.test(f.id),
+    )
+  ) {
+    steps.push(s.rls);
+  }
+  if (critical.some((f) => f.id.startsWith('firebase_'))) steps.push(s.firebase);
+  if (secret.some((f) => /^https?:\/\//.test(f.source ?? ''))) steps.push(s.server);
+  if (steps.length === 0) steps.push(s.fix);
+  steps.push(s.rescan);
+  return steps.map((step, i) => `${i + 1}. ${step}`).join('\n');
+}
 
 function trustMarkdown(tc: TrustCenterView, lang: Lang): string {
   const t = TRUST_TEXT[lang];
@@ -413,7 +439,7 @@ export function buildReport({
   if (pendingSection) md += `\n---\n\n${pendingSection}`;
 
   md += `\n---\n\n## ${t.nextStepsTitle}\n\n`;
-  md += `${counts.critical > 0 ? t.nextStepsCritical : t.nextStepsNormal}\n\n`;
+  md += `${counts.critical > 0 ? criticalSteps(sorted, t.steps) : t.nextStepsNormal}\n\n`;
   if (hasWeb && web.length > 0) md += `${t.initHint}\n\n`;
 
   md += `---\n\n`;

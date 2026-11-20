@@ -57,7 +57,10 @@ import {
 } from '../src/core/pending.js';
 import { ciSummary } from '../src/reporters/ci.js';
 import { checkCookies, checkMixedContent } from '../src/checks/browser.js';
-import { mergeRepeatedSecrets } from '../src/checks/secrets.js';
+import { asLocalOnly, mergeRepeatedSecrets } from '../src/checks/secrets.js';
+import { gitView } from '../src/scanners/folder.js';
+import { spawnSync } from 'node:child_process';
+import { symlinkSync } from 'node:fs';
 import { redirectTarget } from '../src/http/crawl.js';
 import { contrastTrustCenter, parseTrustCenter } from '../src/checks/trust.js';
 import {
@@ -3035,7 +3038,7 @@ console.log('\n44. What inflated a real report — one key four times, a public 
   );
   assert(fb[0]?.severity === 'low', 'low: the key is public by design');
   assert(
-    /do not rotate/i.test(fb[0]?.why ?? '') && /referrers/i.test(fb[0]?.why ?? ''),
+    /do not rotate/i.test(fb[0]?.why ?? '') && /referrer/i.test(fb[0]?.why ?? ''),
     'it says to restrict the key, not to rotate it',
   );
   assert(
@@ -3172,6 +3175,181 @@ console.log('\n44. What inflated a real report — one key four times, a public 
   assert(
     !!why && why.en.includes('/login') && why.en.includes('siteType'),
     'the report says why it was not judged, and how to declare an app',
+  );
+}
+
+console.log('\n45. A folder scan of a real repository — what git sees, and what each key is');
+{
+  const ids = (fs: Finding[]) => fs.map((f) => f.id).join(',');
+  // Vendors told apart. Built at runtime: no key-shaped literal in the repository.
+  const anthropic = ['sk-', 'ant-', 'api03-', 'Fake'.repeat(10)].join('');
+  const openrouter = ['sk-', 'or-', 'v1-', 'ab12'.repeat(16)].join('');
+  const openai = ['sk-', 'proj-', 'Fake'.repeat(10)].join('');
+  assert(
+    ids(scanSource(`ANTHROPIC_API_KEY=${anthropic}`, '.env')) === 'anthropic_key',
+    'an Anthropic key is one Anthropic finding, not also an OpenAI one',
+  );
+  assert(
+    ids(scanSource(`OPENROUTER_API_KEY=${openrouter}`, '.env')) === 'openrouter_key',
+    'an OpenRouter key is named as OpenRouter',
+  );
+  assert(
+    ids(scanSource(`OPENAI_API_KEY=${openai}`, '.env')) === 'openai_key',
+    'an OpenAI key is still OpenAI',
+  );
+
+  const local = scanSource('DATABASE_URL=postgres://app:devpass123@localhost:5432/app', '.env');
+  assert(local.length === 0, 'a database on localhost is not a leaked credential');
+  assert(
+    scanSource('DATABASE_URL=postgres://app:s3cr3tPassw0rd@db.example-prod.net:5432/app', '.env')[0]
+      ?.id === 'db_connection_string',
+    'a remote one still is',
+  );
+
+  const src = scanSource(`OPENAI_API_KEY=${openai}`, '.env')[0]!;
+  assert(
+    !/client JavaScript/.test(src.exploit ?? '') && /project's files/.test(src.exploit ?? ''),
+    "a key in the project's files is not described as shipping in the browser",
+  );
+  const bundle = scanText(`const k="${openai}"`, 'https://app.test/main.js')[0]!;
+  assert(/client JavaScript/.test(bundle.exploit ?? ''), 'a key in a served bundle still is');
+  const localKey = asLocalOnly(src);
+  assert(
+    localKey.severity === 'low' &&
+      /git ignores/.test(localKey.label) &&
+      /never committed/.test(localKey.exploit ?? ''),
+    'a key in an ignored, never-committed file is a low note about this machine',
+  );
+
+  // Android's google-services.json is Firebase too.
+  const key = ['AIza', 'Sy', 'Fake'.repeat(8), 'Q'].join('');
+  const gsj = `{"project_info":{"project_number":"123","project_id":"demo"},"client":[{"client_info":{"mobilesdk_app_id":"1:123:android:abc"},"api_key":[{"current_key":"${key}"}]}]}`;
+  assert(
+    ids(scanSource(gsj, 'android/app/google-services.json')) === 'firebase_web_api_key',
+    "Android's google-services.json key is the Firebase finding, with app restrictions in the advice",
+  );
+
+  // A real repository: what git ignores is not read, except a .env, which is judged as local.
+  const repo = mkdtempSync(join(tmpdir(), 'vw-repo-'));
+  const git = (...a: string[]) =>
+    spawnSync('git', ['-C', repo, '-c', 'user.email=t@t.test', '-c', 'user.name=t', ...a], {
+      encoding: 'utf8',
+    });
+  if (git('init', '-q').status === 0) {
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    mkdirSync(join(repo, 'vendor-sdk', 'example'), { recursive: true });
+    writeFileSync(join(repo, '.gitignore'), '.env\nvendor-sdk/\n');
+    writeFileSync(join(repo, '.env'), `OPENAI_API_KEY=${openai}\n`);
+    writeFileSync(join(repo, 'vendor-sdk', 'example', 'config.ts'), `const k = "${anthropic}";\n`);
+    writeFileSync(join(repo, 'src', 'app.ts'), 'export const x = 1;\n');
+    const outside = mkdtempSync(join(tmpdir(), 'vw-outside-'));
+    writeFileSync(join(outside, 'leak.ts'), `const k = "${openrouter}";\n`);
+    symlinkSync(outside, join(repo, 'src', 'linked'));
+    git('add', '-A');
+    git('commit', '-qm', 'init');
+
+    const view = gitView(repo);
+    assert(
+      view !== null && view.ignored.has('.env') && view.ignored.has('vendor-sdk/'),
+      'git says what it ignores',
+    );
+    const scan = scanFolder(repo, view);
+    assert(!scan.findings.some((f) => f.id === 'anthropic_key'), 'an ignored folder is not read');
+    assert(
+      !scan.findings.some((f) => f.id === 'openrouter_key'),
+      'a symlink is not followed out of the repository',
+    );
+    const envKey = scan.findings.find((f) => f.id === 'openai_key');
+    assert(envKey?.severity === 'low', 'the key in the ignored, never-committed .env is low');
+    assert(
+      !scan.findings.some((f) => f.id === 'committed_env_file'),
+      'and an ignored .env is not "in the codebase"',
+    );
+
+    // The same .env, once committed, is in the history whatever the ignore file says now.
+    git('add', '-f', '.env');
+    git('commit', '-qm', 'oops');
+    git('rm', '-q', '--cached', '.env');
+    git('commit', '-qm', 'remove');
+    const again = scanFolder(repo, gitView(repo));
+    assert(
+      again.findings.find((f) => f.id === 'openai_key')?.severity === 'critical',
+      'an ignored .env that was ever committed is critical again: the key is in the history',
+    );
+    rmSync(outside, { recursive: true, force: true });
+  }
+  rmSync(repo, { recursive: true, force: true });
+
+  // Headers set by a proxy count.
+  const web = mkdtempSync(join(tmpdir(), 'vw-headers-'));
+  writeFileSync(join(web, 'next.config.ts'), 'export default { reactStrictMode: true };\n');
+  assert(
+    scanFolder(web, null).findings.some((f) => f.id === 'nextjs_no_security_headers'),
+    'next.config with no headers and nothing else: reported',
+  );
+  mkdirSync(join(web, 'infra'));
+  writeFileSync(
+    join(web, 'infra', 'site.conf'),
+    'add_header Strict-Transport-Security "max-age=63072000" always;\n',
+  );
+  assert(
+    !scanFolder(web, null).findings.some((f) => f.id === 'nextjs_no_security_headers'),
+    'an nginx config that sets them: not reported',
+  );
+  rmSync(web, { recursive: true, force: true });
+
+  // Pending items that point somewhere useful.
+  const sig = emptySignals();
+  collectSignals(sig, 'apps/api/src/config/env.ts', 'export const env = { port: 3000 };');
+  collectSignals(sig, 'apps/api/src/jobs/cron.ts', 'cron.schedule("0 * * * *", run);');
+  collectSignals(
+    sig,
+    'apps/api/src/routes/notes.ts',
+    "app.get('/notes/:id', async (req) => db.note(req.params.id));",
+  );
+  assert(
+    sig.serverEntry.size === 1 && sig.serverEntry.has('apps/api/src/routes/notes.ts'),
+    'only a file that registers routes is a server entry point, not every file under api/',
+  );
+  const html = emptySignals();
+  collectSignals(
+    html,
+    'app/layout.tsx',
+    'const themeScript = `(function(){document.documentElement.dataset.theme="dark"})()`;\n<script dangerouslySetInnerHTML={{ __html: themeScript }} />',
+  );
+  collectSignals(html, 'app/post.tsx', '<div dangerouslySetInnerHTML={{ __html: post.body }} />');
+  collectSignals(
+    html,
+    'app/x.tsx',
+    'const t = `<b>${name}</b>`;\n<div dangerouslySetInnerHTML={{ __html: t }} />',
+  );
+  assert(
+    [...html.htmlSinks].join(',') === 'app/post.tsx,app/x.tsx',
+    'a fixed theme script is not a sink; a prop or an interpolated template is',
+  );
+
+  // Next steps that match what was found.
+  const report = (fs: Finding[]) =>
+    buildReport({
+      target: '.',
+      dateISO: '2026-11-20',
+      findings: fs,
+      rls: null,
+      scanned: [],
+      lang: 'en',
+    }).markdown;
+  const keyOnly = report([{ ...src, severity: 'critical' }]);
+  assert(
+    /rotate every exposed credential/.test(keyOnly) &&
+      !/RLS/.test(keyOnly.split('Recommended next steps')[1] ?? ''),
+    'a project whose critical is a key is not told to turn RLS on',
+  );
+  const rlsOnly = report([
+    { id: 'rls_turned_off_notes', label: 'x', severity: 'critical', why: '' },
+  ]);
+  assert(
+    /turn RLS on/.test(rlsOnly) && !/rotate every/.test(rlsOnly),
+    'and one whose critical is RLS is not told to rotate keys',
   );
 }
 

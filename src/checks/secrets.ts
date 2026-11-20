@@ -26,6 +26,16 @@ const BUNDLE_EXPLOIT =
 const BUNDLE_EXPLOIT_ES =
   'La clave viaja en el JavaScript del cliente, así que cualquiera puede abrir el código de la página, copiarla y llamar al proveedor haciéndose pasar por ti — sin autenticarse.';
 
+/**
+ * The same preamble for a key found in the project's files rather than in a served bundle. A
+ * folder scan used to tell people their `.env` "ships in the client JavaScript", which is the
+ * one thing a `.env` is for not doing.
+ */
+const SOURCE_EXPLOIT =
+  "The key is written into the project's files, so anyone who gets the code — the repository, a fork, a copied folder — gets the key.";
+const SOURCE_EXPLOIT_ES =
+  'La clave está escrita en los archivos del proyecto, así que quien tenga el código —el repositorio, un fork, una carpeta copiada— tiene la clave.';
+
 /** A Supabase JWT encodes its role in the base64url payload. service_role bypasses RLS. */
 function decodeJwtRole(jwt: string): string | null {
   try {
@@ -149,12 +159,33 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     severity: 'critical',
     check: 2,
     cwe: 'CWE-798',
-    regex: /\bsk-(proj-)?[A-Za-z0-9_-]{20,}\b/g,
+    // `sk-ant-` is Anthropic's and `sk-or-` is OpenRouter's; both have their own rule. Without
+    // the lookahead every Anthropic key was reported twice, once under the wrong vendor.
+    regex: /\bsk-(?!ant-|or-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}\b/g,
     validate: (match) => (match.startsWith('sk_') ? null : { key: mask(match) }),
     exploit:
       'Anyone can use this key to run models on your account until your quota or billing limit is hit.',
     why: 'Leaked OpenAI keys have run up bills of thousands of dollars. Revoke and regenerate.',
     references: [CWE_798],
+  },
+  {
+    id: 'openrouter_key',
+    es: {
+      label: 'Clave de API de OpenRouter',
+      exploit:
+        'Cualquiera puede usar esta clave para llamar a cualquier modelo de OpenRouter con tu saldo, hasta agotarlo.',
+      why: 'Revócala en openrouter.ai/settings/keys y crea una nueva.',
+    },
+    label: 'OpenRouter API key',
+    severity: 'critical',
+    check: 2,
+    cwe: 'CWE-798',
+    regex: /\bsk-or-v1-[A-Za-z0-9]{40,}\b/g,
+    validate: (match) => ({ key: mask(match) }),
+    exploit:
+      'Anyone can use this key to call any OpenRouter model on your credits until they run out.',
+    why: 'Revoke it at openrouter.ai/settings/keys and create a new one.',
+    references: [CWE_798, 'https://openrouter.ai/docs/api-reference/authentication'],
   },
   {
     id: 'anthropic_key',
@@ -258,8 +289,15 @@ export const SECRET_PATTERNS: SecretPattern[] = [
     cwe: 'CWE-798',
     regex:
       /\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss):\/\/[^\s:'"]+:[^\s@'"]+@[^\s/'"]+/gi,
-    validate: (match) =>
-      /:(your|password|pass|user)@/i.test(match) ? null : { snippet: mask(match) },
+    validate: (match) => {
+      if (/:(your|password|pass|user)@/i.test(match)) return null;
+      // A database on this machine — the dev container, the test database — is reachable only
+      // from here. Its password is a local convenience, not a credential anyone outside holds.
+      const host = /@\[?([^\]:/?\s'"]+)/.exec(match)?.[1]?.toLowerCase() ?? '';
+      if (/^(localhost|127(?:\.\d+){3}|0\.0\.0\.0|::1|host\.docker\.internal)$/.test(host))
+        return null;
+      return { snippet: mask(match) };
+    },
     exploit:
       'A full connection string embeds the database host, user and password — anyone reading it can connect directly and read or modify the entire database.',
     why: 'Move it to a server-side environment variable and rotate the credential. It must never reach the client or the repo.',
@@ -378,7 +416,10 @@ function buildFinding(
   raw: string,
   extra: Record<string, string>,
   source: string,
+  where: 'bundle' | 'source' = 'bundle',
 ): Finding {
+  const preamble = where === 'bundle' ? BUNDLE_EXPLOIT : SOURCE_EXPLOIT;
+  const preambleEs = where === 'bundle' ? BUNDLE_EXPLOIT_ES : SOURCE_EXPLOIT_ES;
   return {
     id: pat.id,
     label: pat.label,
@@ -389,12 +430,12 @@ function buildFinding(
     evidence: evidenceOf(raw, extra),
     // The "anyone can call the provider as you" preamble is right for a secret and wrong for
     // the two patterns that exist precisely because the value may be fine to ship.
-    exploit: OWN_EXPLOIT.has(pat.id) ? pat.exploit : `${BUNDLE_EXPLOIT} ${pat.exploit}`,
+    exploit: OWN_EXPLOIT.has(pat.id) ? pat.exploit : `${preamble} ${pat.exploit}`,
     why: pat.why,
     references: pat.references,
     es: {
       label: pat.es.label,
-      exploit: OWN_EXPLOIT.has(pat.id) ? pat.es.exploit : `${BUNDLE_EXPLOIT_ES} ${pat.es.exploit}`,
+      exploit: OWN_EXPLOIT.has(pat.id) ? pat.es.exploit : `${preambleEs} ${pat.es.exploit}`,
       why: pat.es.why,
     },
   };
@@ -542,7 +583,7 @@ const FIREBASE_WEB_KEY: SecretPattern = {
     label: 'Clave web de Firebase — confirma que esté restringida',
     exploit:
       'Esta clave está hecha para ir en el navegador: el SDK de Firebase la necesita, y por sí sola no abre tus datos (eso lo deciden tus reglas de seguridad). El riesgo es qué más puede llamar: sin restricciones, cualquiera puede usarla contra cualquier API de Google activada en el proyecto, incluidas las de pago como Gemini o Maps, a tu costa.',
-    why: 'No la rotes: una clave nueva quedaría igual de visible. En Google Cloud Console → APIs y servicios → Credenciales, restríngela a tus sitios (referentes HTTP) y a las APIs que usa la web: Identity Toolkit y Token Service para el inicio de sesión, y Firebase Installations y FCM Registration si usa notificaciones. Después prueba que el inicio de sesión y las notificaciones sigan funcionando.',
+    why: 'No la rotes: una clave nueva quedaría igual de visible. En Google Cloud Console → APIs y servicios → Credenciales, restríngela a tu app (la web por referente HTTP; Android por nombre de paquete y huella SHA-1; iOS por bundle ID) y a las APIs que usa: Identity Toolkit y Token Service para el inicio de sesión, y Firebase Installations y FCM Registration si usa notificaciones. Después prueba que el inicio de sesión y las notificaciones sigan funcionando.',
   },
   label: 'Firebase web API key — confirm it is restricted',
   severity: 'low',
@@ -551,7 +592,7 @@ const FIREBASE_WEB_KEY: SecretPattern = {
   regex: /(?!)/g,
   exploit:
     'This key is meant to be in the browser: the Firebase SDK needs it, and on its own it opens none of your data — your Security Rules decide that. The risk is what else it can call: unrestricted, anyone can use it against any Google API enabled in the project, including paid ones like Gemini or Maps, on your bill.',
-  why: 'Do not rotate it: a new key would be just as visible. In Google Cloud Console → APIs & Services → Credentials, restrict it to your sites (HTTP referrers) and to the APIs the web app uses: Identity Toolkit and Token Service for sign-in, plus Firebase Installations and FCM Registration if it sends notifications. Then check that sign-in and notifications still work.',
+  why: 'Do not rotate it: a new key would be just as visible. In Google Cloud Console → APIs & Services → Credentials, restrict it to your app (the web by HTTP referrer, Android by package name and SHA-1, iOS by bundle ID) and to the APIs it uses: Identity Toolkit and Token Service for sign-in, plus Firebase Installations and FCM Registration if it sends notifications. Then check that sign-in and notifications still work.',
   references: [
     'https://firebase.google.com/docs/projects/api-keys',
     'https://cloud.google.com/docs/authentication/api-keys#adding-api-restrictions',
@@ -560,7 +601,7 @@ const FIREBASE_WEB_KEY: SecretPattern = {
 
 /** What sits next to a Firebase web config, minified or not, in code or in a `.env`. */
 const FIREBASE_CONTEXT =
-  /firebaseapp\.com|messagingSenderId|MESSAGING_SENDER_ID|\bappId\b\s*:\s*["'`]1:\d+:web:/;
+  /firebaseapp\.com|messagingSenderId|MESSAGING_SENDER_ID|\bappId\b\s*:\s*["'`]1:\d+:web:|mobilesdk_app_id|"project_number"|GOOGLE_APP_ID|GCM_SENDER_ID|firebasestorage\.app/;
 
 /** How far around a key to look for its Firebase config. A config object is a few hundred bytes. */
 const FIREBASE_WINDOW = 600;
@@ -706,7 +747,7 @@ export function scanSource(text: string, relPath: string): Finding[] {
   const out: Finding[] = [];
   for (const { pat, raw, index, extra } of matchSecrets(text)) {
     const line = text.slice(0, index).split('\n').length;
-    out.push(buildFinding(pat, raw, extra, `${relPath}:${line}`));
+    out.push(buildFinding(pat, raw, extra, `${relPath}:${line}`, 'source'));
   }
   return out;
 }
@@ -760,4 +801,29 @@ export function extractSupabaseConfig(text: string): SupabaseConfig | null {
   const sec = text.match(SB_SECRET_RE);
   if (sec) return { projectUrl, anonKey: sec[0], keyKind: 'secret' };
   return { projectUrl, anonKey: null };
+}
+
+/**
+ * A key in a file git ignores and has never committed: on this machine, not in the repository.
+ *
+ * It is still a live key, and worth deleting if nothing uses it — but calling it critical next
+ * to a key that really is public put the two on the same line, and the one that mattered got
+ * read with the same shrug as the one that did not.
+ */
+export function asLocalOnly(f: Finding): Finding {
+  return {
+    ...f,
+    severity: 'low',
+    label: `${f.label} — in a file git ignores`,
+    exploit:
+      'This file is ignored by git and was never committed, so the key has not leaked. It is still a working key on this machine and in its backups.',
+    why: 'If the app no longer uses it, delete it from the file and revoke it at the provider. If it does, keep it here — this is where it belongs.',
+    es: {
+      ...f.es,
+      label: `${f.es?.label ?? f.label} — en un archivo que git ignora`,
+      exploit:
+        'Git ignora este archivo y nunca se commiteó, así que la clave no se filtró. Sigue siendo una clave que funciona, en esta máquina y en sus copias de seguridad.',
+      why: 'Si la app ya no la usa, bórrala del archivo y anúlala en el proveedor. Si la usa, déjala aquí: es su lugar.',
+    },
+  };
 }

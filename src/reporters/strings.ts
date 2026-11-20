@@ -80,7 +80,15 @@ export interface ReportStrings {
   notVerifiedBlurb: string;
   playwrightNote: string;
   nextStepsTitle: string;
-  nextStepsCritical: string;
+  /** The next steps for a run with criticals, each used only when a critical calls for it. */
+  steps: {
+    rotate: string;
+    rls: string;
+    firebase: string;
+    server: string;
+    fix: string;
+    rescan: string;
+  };
   nextStepsNormal: string;
   initHint: string;
   footer: (version: string) => string;
@@ -180,8 +188,14 @@ const EN: ReportStrings = {
   playwrightNote:
     '> Browser console errors were **not** inspected: Playwright is not installed. Install it (`npm i -D playwright && npx playwright install chromium`) and re-run to include runtime errors.',
   nextStepsTitle: 'Recommended next steps',
-  nextStepsCritical:
-    '1. **Today:** rotate every exposed credential listed above.\n2. **Today:** enable RLS on the exposed tables.\n3. **This week:** move any sensitive logic from the browser to the server.\n4. Re-scan to confirm the criticals are closed.',
+  steps: {
+    rotate: '**Today:** rotate every exposed credential listed above.',
+    rls: '**Today:** turn RLS on and replace the open policies on the tables listed above.',
+    firebase: '**Today:** close the open Firebase rules listed above.',
+    server: '**This week:** move every secret the browser does not need to the server.',
+    fix: '**Today:** fix the critical findings above, in order.',
+    rescan: 'Re-scan to confirm the criticals are closed.',
+  },
   nextStepsNormal:
     '1. Address findings in order of severity.\n2. Complement with a manual server-side review.',
   initHint:
@@ -286,8 +300,14 @@ const ES: ReportStrings = {
   playwrightNote:
     '> Los errores de consola del navegador **no** se inspeccionaron: Playwright no está instalado. Instálalo (`npm i -D playwright && npx playwright install chromium`) y vuelve a ejecutar para incluir los errores en tiempo de ejecución.',
   nextStepsTitle: 'Siguientes pasos recomendados',
-  nextStepsCritical:
-    '1. **Hoy:** rota todas las credenciales expuestas que aparecen arriba.\n2. **Hoy:** activa RLS en las tablas expuestas.\n3. **Esta semana:** saca del navegador cualquier lógica sensible y llévala al servidor.\n4. Vuelve a escanear para confirmar que los críticos están cerrados.',
+  steps: {
+    rotate: '**Hoy:** rota todas las credenciales expuestas que aparecen arriba.',
+    rls: '**Hoy:** activa RLS y reemplaza las políticas abiertas en las tablas de arriba.',
+    firebase: '**Hoy:** cierra las reglas de Firebase abiertas que aparecen arriba.',
+    server: '**Esta semana:** lleva al servidor todo secreto que el navegador no necesite.',
+    fix: '**Hoy:** corrige los hallazgos críticos de arriba, en orden.',
+    rescan: 'Vuelve a escanear para confirmar que los críticos están cerrados.',
+  },
   nextStepsNormal:
     '1. Atiende los hallazgos por orden de severidad.\n2. Complétalo con una revisión manual del lado del servidor.',
   initHint:

@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, extname, basename, sep } from 'node:path';
-import { mergeRepeatedSecrets, scanSource } from '../checks/secrets.js';
+import { asLocalOnly, mergeRepeatedSecrets, scanSource } from '../checks/secrets.js';
 import { scanBackendFile } from '../checks/backend.js';
 import { checkUploadValidation } from '../checks/uploads.js';
 import { analyzeMigrations } from '../checks/migrations.js';
@@ -71,8 +72,62 @@ export interface FolderScan {
   signals: ReviewSignals;
 }
 
-function collectFiles(dir: string): string[] {
-  const out: string[] = [];
+/**
+ * What git knows about the folder, when it is a repository.
+ *
+ * A folder scan used to read everything on disk, so it reported what git never sees: the
+ * Firebase sample projects inside Flutter's downloaded plugins, build output, a vendored SDK.
+ * Keys in there are somebody else's, and a report that leads with them is not about this repo.
+ * Inside a repository the scan now reads what git would — tracked files and untracked ones it
+ * does not ignore — plus ignored `.env` files, which are judged as local rather than leaked.
+ */
+export interface GitView {
+  /** Ignored, untracked paths relative to the root, `/`-separated; folders end with `/`. */
+  ignored: Set<string>;
+  /** Whether any commit, on any branch, ever touched `rel`. */
+  everCommitted(rel: string): boolean;
+}
+
+export function gitView(root: string): GitView | null {
+  const git = (...args: string[]) =>
+    spawnSync('git', ['-C', root, ...args], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  const inside = git('rev-parse', '--is-inside-work-tree');
+  if (inside.status !== 0 || inside.stdout.trim() !== 'true') return null;
+  const listed = git(
+    'ls-files',
+    '--others',
+    '--ignored',
+    '--exclude-standard',
+    '--directory',
+    '-z',
+  );
+  if (listed.status !== 0) return null;
+  return {
+    ignored: new Set(listed.stdout.split('\0').filter(Boolean)),
+    everCommitted(rel: string): boolean {
+      const log = git('log', '--all', '--format=%h', '-1', '--', rel);
+      return log.status === 0 && log.stdout.trim() !== '';
+    },
+  };
+}
+
+/** A real `.env`, as opposed to the committed sample of one. */
+function isEnvName(base: string): boolean {
+  return base === '.env' || (base.startsWith('.env') && !ENV_SAFE.test(base));
+}
+
+interface Collected {
+  full: string;
+  /** Git ignores it; only ever true for `.env` files, the one ignored kind still read. */
+  ignored: boolean;
+}
+
+function collectFiles(dir: string, root: string, view: GitView | null): Collected[] {
+  const out: Collected[] = [];
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -83,18 +138,30 @@ function collectFiles(dir: string): string[] {
     const full = join(dir, name);
     let st;
     try {
-      st = statSync(full);
+      // lstat, not stat: a symlink is not followed. Flutter's `.symlinks` point into the
+      // package cache, and a link can just as easily point at the home folder or at itself.
+      st = lstatSync(full);
     } catch {
       continue;
     }
+    if (st.isSymbolicLink()) continue;
+    const rel = relative(root, full).split(sep).join('/');
     if (st.isDirectory()) {
-      if (!IGNORE_DIRS.has(name)) out.push(...collectFiles(full));
+      if (IGNORE_DIRS.has(name) || view?.ignored.has(`${rel}/`)) continue;
+      out.push(...collectFiles(full, root, view));
     } else if (st.size <= MAX_FILE) {
-      out.push(full);
+      const ignored = view?.ignored.has(rel) ?? false;
+      if (ignored && !isEnvName(name)) continue;
+      out.push({ full, ignored });
     }
   }
   return out;
 }
+
+/** Files that set security headers outside the framework: a proxy or a host config. */
+const HEADER_CONFIG = /\.conf$|^_headers$|^Caddyfile$|^\.htaccess$|^vercel\.json$|^netlify\.toml$/i;
+const SECURITY_HEADER =
+  /content-security-policy|strict-transport-security|x-frame-options|x-content-type-options/i;
 
 function read(file: string): string | null {
   try {
@@ -104,14 +171,15 @@ function read(file: string): string | null {
   }
 }
 
-export function scanFolder(root: string): FolderScan {
+export function scanFolder(root: string, view: GitView | null = gitView(root)): FolderScan {
   const findings: Finding[] = [];
   const migrations: { path: string; content: string }[] = [];
   let filesScanned = 0;
   let supabaseContext = false;
+  let headersElsewhere = false;
   const signals = emptySignals();
 
-  for (const file of collectFiles(root)) {
+  for (const { full: file, ignored } of collectFiles(root, root, view)) {
     const rel = relative(root, file);
     const base = basename(file);
     const ext = extname(file);
@@ -126,7 +194,11 @@ export function scanFolder(root: string): FolderScan {
       continue;
     }
 
-    const isEnv = base === '.env' || (base.startsWith('.env') && !ENV_SAFE.test(base));
+    const isEnv = isEnvName(base);
+    if (HEADER_CONFIG.test(base)) {
+      const content = read(file);
+      if (content && SECURITY_HEADER.test(content)) headersElsewhere = true;
+    }
     if (!SCAN_EXT.has(ext) && !SCAN_FILE.has(base) && !isEnv) continue;
 
     const content = read(file);
@@ -140,16 +212,22 @@ export function scanFolder(root: string): FolderScan {
       supabaseContext = true;
     }
 
-    findings.push(...scanSource(content, rel));
+    // An ignored `.env` that no commit ever touched is on this machine, not in the repo.
+    const localOnly = ignored && isEnv && !view?.everCommitted(rel.split(sep).join('/'));
+    const secrets = scanSource(content, rel);
+    findings.push(...(localOnly ? secrets.map(asLocalOnly) : secrets));
     findings.push(...scanBackendFile(rel, content));
     collectSignals(signals, rel, content);
     const upload = checkUploadValidation(rel, content);
     if (upload) findings.push(upload);
 
-    if (isEnv) {
+    // An ignored file is not "in the codebase" — that is what ignoring it means.
+    if (isEnv && !ignored) {
       findings.push({
         id: 'committed_env_file',
-        label: `Environment file '${rel}' is in the codebase`,
+        label: view
+          ? `Environment file '${rel}' is not ignored by git`
+          : `Environment file '${rel}' is in the codebase`,
         severity: 'high',
         check: 3,
         cwe: 'CWE-540',
@@ -163,8 +241,13 @@ export function scanFolder(root: string): FolderScan {
     }
   }
 
+  // Headers set by nginx, a host or a proxy are headers the app has; asking for them again in
+  // next.config would send someone to fix what is already fixed.
+  const kept = headersElsewhere
+    ? findings.filter((f) => f.id !== 'nextjs_no_security_headers')
+    : findings;
   return {
-    findings: mergeRepeatedSecrets(findings),
+    findings: mergeRepeatedSecrets(kept),
     filesScanned,
     migrations,
     supabaseContext,

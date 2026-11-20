@@ -66,9 +66,18 @@ const NOT_APP_CODE =
 const HTML_SINK =
   /dangerouslySetInnerHTML|\bv-html\s*=|\{@html\s|\bset:html\s*=|\.(?:innerHTML|outerHTML)\s*=(?!=)|\binsertAdjacentHTML\s*\(|\bdocument\.write\s*\(/;
 
-/** Paths whose code runs on the server in answer to a request. */
+/**
+ * Paths whose file IS a request handler by convention: an Edge Function, a Next.js route
+ * handler, a pages-router API route. A folder merely named `api/` or `server/` is not one of
+ * these — a whole backend lives there, config and crons included, and listing all of it
+ * turned a precise question into a directory listing.
+ */
 const SERVER_PATH =
-  /(^|[\\/])supabase[\\/]functions[\\/][^\\/]+[\\/]index\.[jt]s$|(^|[\\/])app[\\/](?:.+[\\/])?route\.[jt]s$|(^|[\\/])pages[\\/]api[\\/].+\.[jt]s$|(^|[\\/])(?:server|api)[\\/].+\.[jt]s$/i;
+  /(^|[\\/])supabase[\\/]functions[\\/][^\\/]+[\\/]index\.[jt]s$|(^|[\\/])app[\\/](?:.+[\\/])?route\.[jt]s$|(^|[\\/])pages[\\/]api[\\/].+\.[jt]s$/i;
+
+/** A file that registers routes itself: Express, Fastify, Hono, Koa routers and the like. */
+const ROUTE_REGISTRATION =
+  /\b(?:app|router|server|fastify|api|routes?|hono|r)\.(?:get|post|put|patch|delete|all)\s*\(\s*['"`]\/|\.route\s*\(\s*\{[^}]*\burl\s*:|\bcreateRoute\s*\(/;
 
 /** A server action module, wherever it lives. */
 const USE_SERVER = /^\s*['"]use server['"]/m;
@@ -79,6 +88,38 @@ const REQUEST_INPUT =
 
 /** `fetch(` whose first argument does not start with a fixed `https://…` string. */
 const DYNAMIC_FETCH = /\b(?:fetch|axios(?:\.(?:get|post))?|got)\s*\(\s*(?!['"`]https?:\/\/)/;
+
+/**
+ * True when every React HTML sink in the file inserts a fixed string: a literal, or a constant
+ * defined in the same file as one, with no `${…}` inside. That is the theme-before-paint script
+ * every Next.js app with dark mode carries, and nothing a visitor types can reach it. Any sink
+ * this cannot prove fixed — an expression, a prop, a DOM assignment — keeps the file listed.
+ */
+function onlyFixedHtml(content: string): boolean {
+  if (
+    /\bv-html\s*=|\{@html\s|\bset:html\s*=|\.(?:innerHTML|outerHTML)\s*=(?!=)|\binsertAdjacentHTML\s*\(|\bdocument\.write\s*\(/.test(
+      content,
+    )
+  ) {
+    return false;
+  }
+  const values = [
+    ...content.matchAll(/dangerouslySetInnerHTML\s*=\s*\{\{\s*__html\s*:\s*([^}]+?)\s*\}\}/g),
+  ].map((m) => m[1]!.trim());
+  if (values.length === 0) return false;
+  const fixed = (v: string): boolean => {
+    if (/^(['"])(?:(?!\1)[^\\]|\\.)*\1$/.test(v)) return true;
+    if (/^`[^`]*`$/.test(v)) return !v.includes('${');
+    if (/^[A-Za-z_$][\w$]*$/.test(v)) {
+      const def = new RegExp(
+        `\\b(?:const|let|var)\\s+${v.replace(/\$/g, '\\$')}\\s*=\\s*(\`[^\`]*\`|'[^'\\n]*'|"[^"\\n]*")`,
+      ).exec(content);
+      return Boolean(def && !def[1]!.includes('${'));
+    }
+    return false;
+  };
+  return values.every(fixed);
+}
 
 /** Which builder made this repository, from the files each one leaves behind. */
 export function builderFromFile(relPath: string, content: string | null): Builder | null {
@@ -101,8 +142,9 @@ export function collectSignals(
   content: string,
 ): ReviewSignals {
   if (NOT_APP_CODE.test(relPath)) return signals;
-  if (HTML_SINK.test(content)) signals.htmlSinks.add(relPath);
-  const server = SERVER_PATH.test(relPath) || USE_SERVER.test(content);
+  if (HTML_SINK.test(content) && !onlyFixedHtml(content)) signals.htmlSinks.add(relPath);
+  const server =
+    SERVER_PATH.test(relPath) || USE_SERVER.test(content) || ROUTE_REGISTRATION.test(content);
   if (server) {
     signals.serverEntry.add(relPath);
     if (REQUEST_INPUT.test(content) && DYNAMIC_FETCH.test(content))
