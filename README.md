@@ -45,7 +45,7 @@ what it should do next.
 
 1. **Detects**, deterministically and with no LLM call anywhere — **25 security rules** and
    **19 website checks** over a deployed site or a code folder, plus **9 intent rules** over
-   natural language in **English, Spanish and Portuguese**, held to **842 assertions**.
+   natural language in **English, Spanish and Portuguese**, held to **1,034 assertions**.
 2. **Reports** — a parseable JSON payload for an agent, a formatted markdown report for a person.
 3. **Warns first**, through editor hooks, at the moments risk enters the system.
 
@@ -59,7 +59,9 @@ union of everything else out there.
 **It does not:**
 
 - **Fix anything.** Not security findings, not website ones, not the one-line mechanical ones,
-  and not on request. It does not edit files, open PRs or deploy. Findings carry no `fix` field
+  and not on request. It does not edit files, open PRs or deploy. (The GitHub Action keeps one
+  issue listing what is pending, which `issue: 'false'` turns off: a report where the owner reads,
+  never a change to the code.) Findings carry no `fix` field
   and no `autofix` field, by design — a clear report is the finished product, not a step toward
   one. What to change is the owner's decision and the owner's edit.
 - **Call an LLM.** Not to classify, not to rank, not to suppress false positives. A guardrail
@@ -87,7 +89,7 @@ worth more than either tool's feature list.
 **Built with Claude Code**, which is worth saying out loud in a project whose subject is the code
 AI agents produce. The objection is obvious and fair: a security tool written by an agent is
 exactly the kind of thing this tool exists to be suspicious of. That is why every rule is
-deterministic and readable in this repository, why there are **842 assertions** including corpora
+deterministic and readable in this repository, why there are **1,034 assertions** including corpora
 of harmless input built specifically to make the rules misfire, and why the release notes lead
 with false positives rather than features. [`METHODOLOGY.md`](METHODOLOGY.md) states what those
 numbers were measured against, what they do not cover, and how to reproduce every one of them from
@@ -294,7 +296,7 @@ To do it by hand instead, add it as a **Claude Code** `UserPromptSubmit` hook (i
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "npx vibeward@0.7.0 guard" }] }
+      { "hooks": [{ "type": "command", "command": "npx vibeward@0.8.0 guard" }] }
     ]
   }
 }
@@ -336,7 +338,8 @@ interrupt, and every level still tells the agent:
 
 The **summary** is what makes `warn` safe to use: when the agent finishes, Claude Code and Codex
 show you everything the guard flagged during the turn, worst first, and whether you were asked or
-only the agent was told. A quiet turn prints nothing.
+only the agent was told. A quiet turn prints nothing. What the turn flagged is kept in a small file
+in your OS temp folder — never in the repository — and deleted as soon as it is shown.
 
 ```text
 vibeward flagged 2 things while the agent worked — 1 critical:
@@ -614,7 +617,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: JSiapoDEV/vibeward@v0.7.0
+      - uses: JSiapoDEV/vibeward@v0.8.0
         with:
           path: '.'
           # lang: es               # summary, issue and report in Spanish

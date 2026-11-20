@@ -1,6 +1,6 @@
 # Measurement methodology
 
-vibeward publishes three numbers that reproduce from this repository: **842 assertions**, **0
+vibeward publishes three numbers that reproduce from this repository: **1,034 assertions**, **0
 false positives on 46 benign documents**, **0 false positives on 99 benign prompts across three
 languages**. A fourth — **30 of 31 real apps scanned without a crash** — does not reproduce from
 anything, and is kept out of this list on purpose; §6 gives it in full and says why nobody but the
@@ -18,8 +18,8 @@ Only the first is measured here. Everything below is a statement about inputs in
 rules in `src/`, and about one scan of thirty-one real sites run in a mode that deliberately
 looked at less than half of what matters. None of it is a statement about the security of any app.
 
-Every figure below was produced by running `npm test` on the tagged commit for **v0.7.0**
-(`src/core/version.ts:2`, released `2026-11-13`). Where a number could not be re-derived from the
+Every figure below was produced by running `npm test` on the tagged commit for **v0.8.0**
+(`src/core/version.ts:2`, released `2026-11-20`). Where a number could not be re-derived from the
 code, it is marked as such rather than repeated.
 
 ---
@@ -106,26 +106,28 @@ reading `src/` rather than the README.
 
 | Unit                                      | Count  | Where                                                |
 | ----------------------------------------- | ------ | ---------------------------------------------------- |
-| Distinct static security finding ids      | **24** | `src/checks/*.ts`, excluding `web_*`, injection and intent |
-| Dynamic id families (id built per target) | **14** | e.g. `rls_exposed_*`, `missing_header_*`, `data_*`   |
+| Distinct static security finding ids      | **30** | `src/checks/*.ts`, excluding `web_*`, injection and intent |
+| Dynamic id families (id built per target) | **19** | e.g. `rls_exposed_*`, `dynamic_sql_*`, `rpc_runs_sql_*` |
 | Secret patterns in the table              | **16** | `src/checks/secrets.ts:53`–`:368`                    |
-| Additional secret pass (bearer literals)  | **1**  | `src/checks/secrets.ts:409`                          |
+| Additional secret pass (bearer literals)  | **1**  | `src/checks/secrets.ts:424`                          |
 | Expected security headers                 | **4**  | `src/checks/headers.ts:16`                           |
 | Website checks (`web_*`)                  | **19** | `src/checks/web.ts:515`–`:567`, enumerated literally |
 | Intent rules (the prompt moment)          | **9**  | `src/checks/intent.ts:91`–`:245`                     |
 | Content rules (the read moment)           | **4**  | `src/checks/injection.ts`                            |
-| Command rules (the action moment)         | **4**  | `src/guard/moments.ts:181`–`:223`                    |
+| Command rules (the action moment)         | **4**  | `src/guard/moments.ts:219`–`:271`                    |
 | Guard-supported editors                   | **7**  | `src/init/capabilities.ts`                           |
 | Guardrail languages                       | **3**  | en / es / pt, `src/checks/lexicon.ts:18`             |
 | Verb roles per language                   | **6**  | `weaken`, `expose`, `place`, `ship`, `emit`, `allow` |
 
-**How the "24" is derived, exactly.** `grep -rho "id: '[^']*'" src/checks/*.ts | sort -u` returns
-**56** distinct id literals. Three sets come out of it, because they are counted on their own rows
+**How the "30" is derived, exactly.** `grep -rho "id: '[^']*'" src/checks/*.ts | sort -u` returns
+**62** distinct id literals. Three sets come out of it, because they are counted on their own rows
 above: the 19 `web_*` ids, the 4 `injection-*` ids, and the 9 intent ids (`disable-rls`,
 `service-role-client`, `make-public`, `remove-auth`, `cors-wildcard`, `hardcode-secret`,
-`disable-security`, `commit-env`, `upload-type-by-name`). 56 − 19 − 4 − 9 = **24**. Counting file by file instead gives
-26, because `permissive_policy` and `security_definer` are each declared in two files; the census
-counts distinct ids, not declarations.
+`disable-security`, `commit-env`, `upload-type-by-name`). 62 − 19 − 4 − 9 = **30**. Counting file by file instead gives
+31, because `security_definer` is declared in two files; the census counts distinct ids, not
+declarations. The 19 dynamic families are the lines `grep -rn 'id: `' src/checks/*.ts` prints;
+`rls_disabled_*` is built in two of them (migrations and the live probe), so the distinct prefixes
+are 18.
 
 **On the figure "25 security rules."** `README.md:46` says 25, and that number is the **25-point
 security checklist the reports cite by number** through the `check` field on a finding
@@ -174,13 +176,13 @@ figure is their sum.
 
 | Suite                    | Assertions | What it holds                                                            |
 | ------------------------ | ---------- | ------------------------------------------------------------------------ |
-| `test/self-test.ts`      | **363**    | Detection logic over synthetic inputs, 38 sections, no external calls    |
+| `test/self-test.ts`      | **514**    | Detection logic over synthetic inputs, 43 sections, no external calls    |
 | `test/prompt-test.ts`    | **12**     | Interactive selectors driven through a fake TTY, terminal state restored |
 | `test/intent-test.ts`    | **166**    | The prompt gate, en + es + pt                                            |
 | `test/injection-test.ts` | **83**     | The content gate                                                         |
-| `test/hosts-test.ts`     | **164**    | One golden payload per editor, per moment, plus adversarial regressions  |
+| `test/hosts-test.ts`     | **205**    | One golden payload per editor, per moment, the guard levels and the end-of-turn summary, plus adversarial regressions |
 | `test/contract-test.ts`  | **54**     | The promises in §1.2, asserted                                           |
-| **Total**                | **842**    |                                                                          |
+| **Total**                | **1,034**  |                                                                          |
 
 `test/self-test.ts:1` states its own boundary: _"Self-test with SYNTHETIC data (no real secrets).
 Validates detection logic without touching any external system."_ No suite touches an external
@@ -518,7 +520,7 @@ _class_. The benign corpus went from 41 to 46 for this, and the count is in §2.
 This is the only measurement in this project taken against systems the maintainer does not own.
 It is reported with its method and its limits because the limits are larger than the result.
 
-**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.7.0. Treat the
+**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.8.0. Treat the
 figures as historical.
 
 **Method.** A scan has two layers with very different sensitivity:
@@ -581,7 +583,7 @@ itself (§3.2).
 ```bash
 git clone https://github.com/JSiapoDEV/vibeward
 cd vibeward
-git checkout v0.7.0     # every figure below is from this tag, not from HEAD
+git checkout v0.8.0     # every figure below is from this tag, not from HEAD
 npm ci
 npm test
 ```
@@ -600,11 +602,11 @@ False positives: 0/46                          # test/injection-test.ts
 To run one suite on its own:
 
 ```bash
-npx tsx test/self-test.ts        # 363
+npx tsx test/self-test.ts        # 514
 npx tsx test/prompt-test.ts      #  12
 npx tsx test/intent-test.ts      # 166
 npx tsx test/injection-test.ts   #  83
-npx tsx test/hosts-test.ts       # 164
+npx tsx test/hosts-test.ts       # 205
 npx tsx test/contract-test.ts    #  54
 ```
 
@@ -627,9 +629,9 @@ It prints the fourteen arrays and their sizes: 46 / 22 / 4 / 3 for the content g
 To check the rule census in §2:
 
 ```bash
-# 56 distinct id literals in total:
+# 62 distinct id literals in total:
 grep -rho "id: '[^']*'" src/checks/*.ts | sort -u | wc -l
-# the 24 static security ids — web, injection and intent removed, since §2 counts those
+# the 30 static security ids — web, injection and intent removed, since §2 counts those
 # on their own rows:
 grep -rho "id: '[^']*'" src/checks/*.ts | sort -u \
   | grep -Ev "web_|injection-|disable-rls|service-role-client|make-public|remove-auth|cors-wildcard|hardcode-secret|disable-security|commit-env|upload-type-by-name" \
@@ -637,7 +639,7 @@ grep -rho "id: '[^']*'" src/checks/*.ts | sort -u \
 grep -rn 'id: `' src/checks/*.ts          # dynamic id families
 sed -n '515,567p' src/checks/web.ts       # the 19 website checks, enumerated literally
 sed -n '91,245p' src/checks/intent.ts     # the 9 intent rules
-sed -n '181,223p' src/guard/moments.ts    # the 4 command rules
+sed -n '219,271p' src/guard/moments.ts    # the 4 command rules
 grep -rhoE "check: [0-9]+" src/ | sort -u # the checklist positions actually used
 ```
 
