@@ -186,8 +186,8 @@ export function folderCoverage(input: {
   if (migrations > 0) {
     cov.checked(
       AREA.sqlMigrations,
-      `Supabase/SQL migrations in ${migrations} file(s) (RLS, permissive policies, SECURITY DEFINER, anon grants)`,
-      `Migraciones de Supabase/SQL en ${migrations} fichero(s) (RLS, políticas permisivas, SECURITY DEFINER, permisos a anon)`,
+      `Supabase/SQL migrations in ${migrations} file(s) (RLS, permissive policies, SECURITY DEFINER, anon grants, dynamic SQL in functions, policies that trust user_metadata, views that skip RLS)`,
+      `Migraciones de Supabase/SQL en ${migrations} fichero(s) (RLS, políticas permisivas, SECURITY DEFINER, permisos a anon, SQL dinámico en funciones, políticas que confían en user_metadata, vistas que se saltan RLS)`,
     );
   } else if (supabaseContext) {
     // The loudest silence this scanner had. A Supabase project whose schema is managed in the

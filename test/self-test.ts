@@ -2164,5 +2164,241 @@ console.log('\n38. File uploads — a type check the sender writes is not a chec
   assert(!hasFileInput('<input type="text"> {type:"files"}'), 'other inputs are not');
 }
 
+console.log(
+  '\n39. Migrations — SQL its caller writes, metadata its user writes, views that skip RLS',
+);
+{
+  const run = (sql: string, supabaseContext = true) =>
+    analyzeMigrations([{ path: 'supabase/migrations/0042.sql', content: sql }], {
+      supabaseContext,
+    });
+  const ids = (sql: string, ctx = true) => run(sql, ctx).map((f) => f.id);
+  const fn = (args: string, body: string, attrs = 'language plpgsql security definer') =>
+    `create or replace function public.f(${args}) returns void ${attrs} as $$\nbegin\n${body}\nend;\n$$;`;
+
+  // ── Dynamic SQL: each of these hands the caller a piece of the statement.
+  const RISKY_DYNAMIC: [string, string][] = [
+    [fn('query text', 'execute query;'), 'the whole statement is the argument (exec_sql)'],
+    [
+      fn('term text', "return query execute 'select * from docs where t = ''' || term || '''';"),
+      'concatenated into the statement',
+    ],
+    [
+      fn('tbl text, id text', "execute format('select * from %s where id = %L', tbl, id);"),
+      'bound to %s in format()',
+    ],
+    [
+      fn('id text, tbl text', "execute format('select * from %2$s where id = %1$L', id, tbl);"),
+      'bound to %2$s by explicit position',
+    ],
+    [
+      fn(
+        'tag text',
+        "declare q text;\nbegin\nq := 'delete from logs where tag = ' || tag;\nexecute q;",
+      ),
+      'built in a variable, then executed',
+    ],
+    [fn('text', 'execute $1;'), 'an unnamed parameter, referenced as $1'],
+    [
+      fn('tbl text', 'execute format($q$select * from %s$q$, tbl);'),
+      'bound to %s in a dollar-quoted template',
+    ],
+    [fn('sql_text varchar(2000)', "execute concat('select ', sql_text);"), 'wrapped in concat()'],
+  ];
+  for (const [sql, why] of RISKY_DYNAMIC) {
+    assert(ids(sql).includes('dynamic_sql_f'), `dynamic SQL flagged: ${why}`);
+  }
+
+  // ── The same shapes written safely. A detector that has never been shown these has not
+  // been tested: every one is how the Postgres docs say to do it.
+  const BENIGN_DYNAMIC: [string, string][] = [
+    [
+      fn('tbl text, id text', "execute format('select * from %I where id = %L', tbl, id);"),
+      'format() with %I and %L',
+    ],
+    [
+      fn('uid text', "execute 'select * from profiles where id = $1' into r using uid;"),
+      'the value passed with USING',
+    ],
+    [
+      fn('tbl text', "execute 'select count(*) from ' || quote_ident(tbl);"),
+      'quote_ident() around the name',
+    ],
+    [
+      fn('label text', "execute 'refresh materialized view stats';"),
+      'a constant statement, the argument unused',
+    ],
+    [
+      fn('query text', "select * from docs where body ilike '%' || query || '%';", 'language sql'),
+      'a SQL-language function, which cannot run dynamic SQL',
+    ],
+    [
+      fn('term text', 'return query select * from docs where t = term;', 'language plpgsql'),
+      'static SQL with a variable, which Postgres binds as a parameter',
+    ],
+    [
+      'create trigger on_signup after insert on auth.users for each row execute function public.handle_new_user();',
+      'EXECUTE FUNCTION in a trigger',
+    ],
+    [fn('n integer', "execute 'select ' || n;"), 'a non-text argument cannot carry a statement'],
+    [
+      fn('query text', '-- execute query; was the old version\nperform 1;'),
+      'EXECUTE inside a comment',
+    ],
+    [
+      fn('tbl text', 'execute format($q$select * from %I where t = %L$q$, tbl, tbl);'),
+      'a dollar-quoted template read spec by spec, as Supabase’s own examples write them',
+    ],
+    [
+      'create or replace procedure app.make_partition(day text) language plpgsql as $$\nbegin\nexecute format($i$create table if not exists app."p_%1$s" (like app.p)$i$, day);\nend;\n$$;',
+      'a PROCEDURE, which PostgREST never serves',
+    ],
+  ];
+  for (const [sql, why] of BENIGN_DYNAMIC) {
+    assert(!ids(sql).some((i) => i.startsWith('dynamic_sql_')), `not dynamic SQL: ${why}`);
+  }
+
+  // Who can call it decides how bad it is — read from the same migrations.
+  const definer = run(fn('query text', 'execute query;'));
+  assert(
+    definer.find((f) => f.id === 'dynamic_sql_f')?.severity === 'critical',
+    'SECURITY DEFINER callable by anon is critical',
+  );
+  const invoker = run(fn('query text', 'execute query;', 'language plpgsql'));
+  assert(
+    invoker.find((f) => f.id === 'dynamic_sql_f')?.severity === 'high',
+    'SECURITY INVOKER is high: RLS still applies, the statement does not',
+  );
+  const revoked = run(
+    `${fn('query text', 'execute query;')}\nrevoke execute on function public.f(text) from public, anon, authenticated;`,
+  );
+  assert(
+    revoked.find((f) => f.id === 'dynamic_sql_f')?.severity === 'medium',
+    'EXECUTE revoked from anon and authenticated drops it to medium',
+  );
+  const anonOnly = run(
+    `${fn('query text', 'execute query;')}\nrevoke execute on function public.f(text) from anon;`,
+  );
+  assert(
+    anonOnly.find((f) => f.id === 'dynamic_sql_f')?.severity === 'high',
+    'revoked from anon only: every signed-in user can still call it',
+  );
+  const evidence = definer.find((f) => f.id === 'dynamic_sql_f');
+  assert(
+    evidence?.source === 'supabase/migrations/0042.sql:3' &&
+      (evidence.evidence ?? '').startsWith('EXECUTE query') &&
+      Boolean(evidence.es?.label),
+    'points at the EXECUTE line, quotes it, and carries Spanish',
+  );
+
+  // ── Policies keyed on what the user can write about themselves.
+  const RISKY_POLICY: [string, string][] = [
+    [
+      "create policy \"admins read all\" on public.orders for select using ((auth.jwt() -> 'user_metadata' ->> 'role') = 'admin');",
+      'a role in user_metadata',
+    ],
+    [
+      "alter policy tenant_rows on docs using (auth.jwt()->'user_metadata'->>'tenant_id' = tenant_id::text);",
+      'a tenant in user_metadata, in ALTER POLICY',
+    ],
+    [
+      "create policy staff on public.tickets for update using (exists (select 1 from auth.users u where u.id = auth.uid() and u.raw_user_meta_data->>'role' = 'staff'));",
+      'raw_user_meta_data read from auth.users',
+    ],
+  ];
+  for (const [sql, why] of RISKY_POLICY) {
+    assert(
+      ids(sql).some((i) => i.startsWith('rls_user_metadata_')),
+      `user_metadata policy flagged: ${why}`,
+    );
+  }
+  const BENIGN_POLICY: [string, string][] = [
+    [
+      "create policy admins on public.orders for select using ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');",
+      'app_metadata, which only the server writes',
+    ],
+    [
+      "create function public.handle_new_user() returns trigger language plpgsql security definer set search_path = '' as $$\nbegin\ninsert into public.profiles (id, full_name) values (new.id, new.raw_user_meta_data->>'full_name');\nreturn new;\nend;\n$$;",
+      'the signup trigger copying a display name — the most common use, and not a policy',
+    ],
+    [
+      '-- never key a policy on user_metadata\ncreate policy own on public.notes for select using (auth.uid() = user_id);',
+      'a comment that warns against it',
+    ],
+  ];
+  for (const [sql, why] of BENIGN_POLICY) {
+    assert(
+      !ids(sql).some((i) => i.startsWith('rls_user_metadata_')),
+      `not a user_metadata policy: ${why}`,
+    );
+  }
+  const policy = run(RISKY_POLICY[0]![0]).find((f) => f.id === 'rls_user_metadata_orders');
+  assert(
+    policy?.severity === 'high' &&
+      (policy.evidence ?? '').includes('user_metadata') &&
+      Boolean(policy.es?.impact),
+    'names the table, quotes the user_metadata part, carries Spanish',
+  );
+
+  // ── Views.
+  assert(
+    ids('create or replace view leaderboard as select * from scores;').includes(
+      'view_bypasses_rls_leaderboard',
+    ),
+    'a view in public without security_invoker is flagged',
+  );
+  assert(
+    ids('create view public.user_emails as select id, email from auth.users;').includes(
+      'view_exposes_auth_users_user_emails',
+    ),
+    'a view over auth.users is flagged on its own',
+  );
+  assert(
+    run('create view public.user_emails as select id, email from auth.users;', false).find(
+      (f) => f.id === 'view_exposes_auth_users_user_emails',
+    )?.severity === 'critical',
+    'auth.users needs no other evidence of Supabase, and is critical',
+  );
+  const BENIGN_VIEW: [string, string][] = [
+    [
+      'create view public.my_orders with (security_invoker = true) as select * from orders;',
+      'security_invoker = true',
+    ],
+    ['create view public.my_orders with (security_invoker) as select 1;', 'bare security_invoker'],
+    ['create view private.stats as select count(*) from orders;', 'outside the exposed schema'],
+    ['create temp view scratch as select 1;', 'a temporary view'],
+    [
+      'create view public.board as select * from scores;\nalter view public.board set (security_invoker = on);',
+      'fixed later with ALTER VIEW',
+    ],
+    ['create materialized view public.daily as select 1;', 'a materialized view is another rule'],
+  ];
+  for (const [sql, why] of BENIGN_VIEW) {
+    assert(!ids(sql).some((i) => i.startsWith('view_')), `view not flagged: ${why}`);
+  }
+  assert(
+    !ids('create view report as select * from orders;', false).some((i) => i.startsWith('view_')),
+    'a plain view in a project with no sign of the RLS model is not an accusation',
+  );
+
+  // The guard sees the same thing the moment the agent writes it.
+  const written = scanWriteMoment({
+    filePath: 'supabase/migrations/20261120_exec.sql',
+    content: fn('query text', 'execute query;'),
+  });
+  assert(
+    written.some((r) => r.id === 'dynamic_sql_f' && /USING/.test(r.instead)),
+    'guard: an exec_sql helper is caught as it is written, with its own advice',
+  );
+  const inline = scanWriteMoment({
+    filePath: 'scripts/setup.ts',
+    content: `await sql\`${RISKY_POLICY[0]![0]}\``,
+  });
+  assert(
+    inline.some((r) => r.id === 'rls_user_metadata_orders'),
+    'guard: a policy inside another kind of file is still read',
+  );
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

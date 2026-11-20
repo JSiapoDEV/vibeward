@@ -16,6 +16,9 @@ import type { Risk } from './verdict.js';
 
 /** Files whose contents are worth scanning for a pending write. */
 const SQL_FILE = /\.sql$/i;
+/** SQL that is worth reading even when it sits inside another kind of file. */
+const INLINE_SQL =
+  /\b(?:alter|create)\s+table\b|\bcreate\s+(?:or\s+replace\s+)?(?:function|view|policy)\b|\balter\s+policy\b/i;
 
 /** Never worth scanning: vibeward's own machinery and vendored code. */
 const NOT_SOURCE = /(^|[\\/])(\.git[\\/]|node_modules[\\/]|dist[\\/]|build[\\/]|\.next[\\/])/i;
@@ -75,6 +78,18 @@ function insteadFor(f: Finding): string {
   }
   if (f.id === 'permissive_policy') {
     return 'Replace `USING (true)` with the condition that actually describes who may see the row — `auth.uid() = user_id` for owner-scoped data. A policy that is always true is the same as no policy.';
+  }
+  if (f.id.startsWith('dynamic_sql_')) {
+    return 'Pass values into dynamic SQL with `EXECUTE … USING`, or quote them: `format()` with `%I` for names and `%L` for values. A function that executes whatever text it receives should not be callable through the API at all — revoke EXECUTE from `anon` and `authenticated`.';
+  }
+  if (f.id.startsWith('rls_user_metadata_')) {
+    return 'Read the role or tenant from `app_metadata`, which only the server can write, or from a table users cannot update. `user_metadata` is whatever the user last sent to `updateUser()`.';
+  }
+  if (f.id.startsWith('view_exposes_auth_users_')) {
+    return 'Keep what the app needs to show in a table of its own, such as `profiles`, with RLS. Do not serve `auth.users` through the API.';
+  }
+  if (f.id.startsWith('view_bypasses_rls_')) {
+    return 'Create the view `with (security_invoker = true)` so it applies the RLS of whoever queries it, or keep it out of the exposed schema.';
   }
   if (f.id === 'security_definer') {
     return 'Run the function as the caller unless it genuinely needs to escalate, and if it does, pin `search_path` and validate every argument. SECURITY DEFINER runs with the owner rights and bypasses the caller policies.';
@@ -157,7 +172,7 @@ export function scanWriteMoment({ filePath, content }: PendingWrite): Risk[] {
     if (upload) risks.push(fromFinding(upload, filePath));
   }
 
-  if (SQL_FILE.test(filePath) || /\b(alter|create)\s+table\b/i.test(content)) {
+  if (SQL_FILE.test(filePath) || INLINE_SQL.test(content)) {
     // `supabaseContext: false` on purpose: a single pending file is not enough evidence that
     // the project uses the RLS model at all, and "this new table has no RLS" on a Prisma app
     // whose database sits behind a server is a false accusation. The rules that matter here —
