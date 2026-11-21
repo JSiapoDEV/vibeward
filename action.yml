@@ -42,9 +42,13 @@ runs:
     # That is the same argument this project makes against `npx @latest` in a hook, and it
     # would be hard to make credibly while depending on a floating tag here.
     - name: Set up Node
-      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: '24'
+        # setup-node caches dependencies on its own since v5. This job installs nothing from
+        # the caller's lockfile, and its token can write issues and security events — the case
+        # setup-node's own README says to switch the cache off for.
+        package-manager-cache: false
 
     # The version comes from the action's own package.json, which is checked out at whatever
     # ref the caller pinned. `uses: JSiapoDEV/vibeward@v0.5.1` therefore runs vibeward 0.5.1
@@ -148,6 +152,6 @@ runs:
     - name: Upload SARIF to the Security tab
       if: always()
       continue-on-error: true
-      uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+      uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
       with:
         sarif_file: .vibeward/ci/vibeward.sarif
