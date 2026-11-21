@@ -1,5 +1,5 @@
 // Single source of truth for the version string. Keep in sync with package.json.
-export const VERSION = '0.8.2';
+export const VERSION = '0.8.3';
 
 /**
  * The day this version was released, ISO. Bumped with VERSION, on the same line of the

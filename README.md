@@ -297,7 +297,7 @@ is not committed and does not run on every teammate's machine), pinned to an exa
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "npx vibeward@0.8.2 guard" }] }
+      { "hooks": [{ "type": "command", "command": "npx vibeward@0.8.3 guard" }] }
     ]
   }
 }
@@ -632,7 +632,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: JSiapoDEV/vibeward@v0.8.2
+      - uses: JSiapoDEV/vibeward@v0.8.3
         with:
           path: '.'
           # lang: es               # summary, issue and report in Spanish

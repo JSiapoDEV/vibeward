@@ -18,7 +18,7 @@ Only the first is measured here. Everything below is a statement about inputs in
 rules in `src/`, and about one scan of thirty-one real sites run in a mode that deliberately
 looked at less than half of what matters. None of it is a statement about the security of any app.
 
-Every figure below was produced by running `npm test` on the tagged commit for **v0.8.2**
+Every figure below was produced by running `npm test` on the tagged commit for **v0.8.3**
 (`src/core/version.ts:2`, released `2026-11-20`). Where a number could not be re-derived from the
 code, it is marked as such rather than repeated.
 
@@ -523,7 +523,7 @@ _class_. The benign corpus went from 41 to 46 for this, and the count is in §2.
 This is the only measurement in this project taken against systems the maintainer does not own.
 It is reported with its method and its limits because the limits are larger than the result.
 
-**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.8.2. Treat the
+**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.8.3. Treat the
 figures as historical.
 
 **Method.** A scan has two layers with very different sensitivity:
@@ -586,7 +586,7 @@ itself (§3.2).
 ```bash
 git clone https://github.com/JSiapoDEV/vibeward
 cd vibeward
-git checkout v0.8.2     # every figure below is from this tag, not from HEAD
+git checkout v0.8.3     # every figure below is from this tag, not from HEAD
 npm ci
 npm test
 ```
