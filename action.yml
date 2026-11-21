@@ -30,7 +30,7 @@ inputs:
     required: false
     default: 'false'
   issue:
-    description: 'Keep one open issue with what is pending, updated on each push to the default branch and closed when nothing is left. Needs `issues: write`.'
+    description: 'Keep one issue with what is pending, updated on each push to the default branch. It closes when everything is fixed or ticked, and reopens only for something new. Needs `issues: write`.'
     required: false
     default: 'true'
 
@@ -96,50 +96,51 @@ runs:
     # without a new issue per push. Only from the default branch — a feature branch is not
     # what is deployed — and never on pull_request, where a fork's token cannot write issues.
     # A permission error is a warning, not a failed build: the scan itself already ran.
+    #
+    # What to do with it is decided in action/issue.mjs, which has tests: keep the ticks that
+    # still hold, close when nothing is left unticked, and once closed stay closed until
+    # something new appears — then reopen that same issue, never a second one.
     - name: Update the pending-items issue
       if: always() && inputs.issue == 'true' && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         REPORT_LANG: ${{ inputs.lang }}
+        ACTION_PATH: ${{ github.action_path }}
       run: |
         [ -s .vibeward/ci/summary.md ] || exit 0
         cd .vibeward/ci
-        if [ "$REPORT_LANG" = "es" ]; then TITLE="vibeward: pendientes"; else TITLE="vibeward: pending"; fi
+        if [ "$REPORT_LANG" = "es" ]; then
+          TITLE="vibeward: pendientes"; DONE="No queda nada pendiente en"; NEW="Hay algo nuevo en"
+        else
+          TITLE="vibeward: pending"; DONE="Nothing left as of"; NEW="Something new as of"
+        fi
         warn() { echo "::warning::vibeward could not update the \"$TITLE\" issue. Add \`issues: write\` to the workflow permissions, or set \`issue: 'false'\`."; exit 0; }
 
-        NUMBER=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" \
-          --json number,title --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty") || warn
+        # Open or closed: a closed one is the owner's answer, and looking only for an open one
+        # is what used to open a fresh issue, every item unticked, on the next push.
+        FOUND=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "\"$TITLE\" in:title" \
+          --json number,title,state \
+          --jq "map(select(.title == \"$TITLE\")) | (map(select(.state == \"OPEN\")) + .) | .[0] // empty | \"\(.number) \(.state)\"") || warn
+        NUMBER=""; STATE="NONE"
+        if [ -n "$FOUND" ]; then read -r NUMBER STATE <<< "$FOUND"; fi
         OLD=""
         if [ -n "$NUMBER" ]; then
           OLD=$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body) || warn
         fi
-
-        # Keep what the owner already ticked: an item still listed and checked before stays
-        # checked. Anything vibeward no longer sees is simply gone from the new list.
         printf '%s' "$OLD" > issue-old.md
-        node -e '
-          const fs = require("fs");
-          const old = fs.readFileSync("issue-old.md", "utf8");
-          const done = new Set([...old.matchAll(/^- \[x\] (.*)$/gim)].map((m) => m[1]));
-          const body = fs.readFileSync("summary.md", "utf8")
-            .split("\n")
-            .map((l) => { const m = /^- \[ \] (.*)$/.exec(l); return m && done.has(m[1]) ? "- [x] " + m[1] : l; })
-            .join("\n");
-          fs.writeFileSync("issue.md", body);
-          process.stdout.write(String((body.match(/^- \[ \] /gm) || []).length));
-        ' > open-count || warn
-        OPEN=$(cat open-count)
 
-        if [ "$OPEN" = "0" ]; then
-          if [ -n "$NUMBER" ]; then
-            gh issue close "$NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Nothing left as of $GITHUB_SHA." || warn
-          fi
-        elif [ -n "$NUMBER" ]; then
-          gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file issue.md || warn
-        else
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file issue.md || warn
-        fi
+        ACTION=$(node "$ACTION_PATH/action/issue.mjs" issue-old.md summary.md "$STATE" issue.md) || warn
+        case "$ACTION" in
+          create) gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file issue.md || warn ;;
+          edit) gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file issue.md || warn ;;
+          close)
+            gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file issue.md || warn
+            gh issue close "$NUMBER" --repo "$GITHUB_REPOSITORY" --comment "$DONE $GITHUB_SHA." || warn ;;
+          reopen)
+            gh issue edit "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file issue.md || warn
+            gh issue reopen "$NUMBER" --repo "$GITHUB_REPOSITORY" --comment "$NEW $GITHUB_SHA." || warn ;;
+        esac
 
     # Code scanning on a private repository needs GitHub Code Security. Without it this upload
     # fails, and the run summary and the issue above are where the results are read instead —

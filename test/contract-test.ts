@@ -731,6 +731,193 @@ console.log('\ninit in a real repository — personal hooks, backups out of the 
   rmSync(home, { recursive: true, force: true });
 }
 
+console.log('\nThe pending-items issue — what the Action does with it');
+{
+  // action/issue.mjs is run exactly as action.yml runs it: a file in, a word out.
+  const script = join(import.meta.dirname, '..', 'action', 'issue.mjs');
+  const work = mkdtempSync(join(tmpdir(), 'vw-issue-'));
+  const decide = (old: string, state: 'OPEN' | 'CLOSED' | 'NONE', summary: string) => {
+    writeFileSync(join(work, 'old.md'), old);
+    writeFileSync(join(work, 'summary.md'), summary);
+    const out = join(work, 'new.md');
+    rmSync(out, { force: true });
+    const run = spawnSync(
+      process.execPath,
+      [script, join(work, 'old.md'), join(work, 'summary.md'), state, out],
+      { encoding: 'utf8' },
+    );
+    return {
+      action: run.stdout,
+      body: existsSync(out) ? readFileSync(out, 'utf8') : '',
+      error: run.stderr,
+    };
+  };
+  const ticked = (body: string) =>
+    [...body.matchAll(/^- \[([ x])\] \*\*\w+\*\* — (\w+)/gm)].map((m) => `${m[1]}${m[2]}`);
+  // The summary's own shape: an item, then its files indented on the line below.
+  const summary = (items: [string, string[]][]) =>
+    `<!-- vibeward:summary findings=0 critical=0 pending=${items.length} -->\n## vibeward\n\n### Pending\n\n` +
+    items
+      .map(
+        ([name, files]) =>
+          `- [ ] **Review** — ${name} needs a look.\n` +
+          (files.length ? `  Files: ${files.map((f) => `\`${f}\``).join(', ')}\n` : ''),
+      )
+      .join('') +
+    '\n<sub>footer</sub>\n';
+  const tick = (body: string, ...names: string[]) =>
+    body.replace(/^- \[ \] (\*\*\w+\*\* — (\w+).*)$/gm, (line, rest, name) =>
+      names.includes(name) ? `- [x] ${rest}` : line,
+    );
+
+  const first = summary([
+    ['html', ['src/comment.js']],
+    ['idor', ['server/index.js']],
+  ]);
+  let r = decide('', 'NONE', first);
+  assert(
+    r.action === 'create' && ticked(r.body).join() === ' html, idor',
+    `no issue yet: one is created, nothing ticked${r.error ? ` — ${r.error.slice(0, 200)}` : ''}`,
+  );
+  assert(
+    decide('', 'NONE', '## vibeward\n\nNothing.\n').action === 'none',
+    'nothing pending, no issue',
+  );
+
+  r = decide(tick(first, 'html'), 'OPEN', first);
+  assert(
+    r.action === 'edit' && ticked(r.body).join() === 'xhtml, idor',
+    'the same issue is edited, and a tick on an unchanged item holds',
+  );
+
+  const grown = summary([
+    ['html', ['src/comment.js', 'src/profile.js']],
+    ['idor', ['server/index.js']],
+  ]);
+  r = decide(tick(first, 'html'), 'OPEN', grown);
+  assert(
+    ticked(r.body).join() === ' html, idor',
+    'a tick does not survive a new file joining the item — a new sink is not "reviewed"',
+  );
+  r = decide(tick(grown, 'html'), 'OPEN', first);
+  assert(ticked(r.body)[0] === 'xhtml', 'it survives a file leaving the item (that one was fixed)');
+
+  r = decide(tick(first, 'html', 'idor'), 'OPEN', first);
+  assert(
+    r.action === 'close' && ticked(r.body).join() === 'xhtml,xidor',
+    'everything ticked: the issue closes, with the list as it stood',
+  );
+
+  // The two that broke on a real repository: a closed issue came back as a NEW one, with
+  // every item unticked, on the very next push.
+  r = decide(tick(first, 'html', 'idor'), 'CLOSED', first);
+  assert(r.action === 'none', 'closed with everything ticked: the next push leaves it closed');
+  r = decide(first, 'CLOSED', first);
+  assert(
+    r.action === 'none',
+    'closed by hand with items unticked: closing it was the answer, it stays closed',
+  );
+  const added = summary([
+    ['html', ['src/comment.js']],
+    ['idor', ['server/index.js']],
+    ['ssrf', ['server/index.js']],
+  ]);
+  r = decide(first, 'CLOSED', added);
+  assert(
+    r.action === 'reopen' && ticked(r.body).join() === 'xhtml,xidor, ssrf',
+    'something new: the same issue reopens, and only the new item is unticked',
+  );
+  r = decide(first, 'CLOSED', grown);
+  assert(
+    r.action === 'reopen' && ticked(r.body).join() === ' html,xidor',
+    'a new file in a listed item reopens it too, with that item unticked',
+  );
+
+  // A list cut at eight files hides the rest: only the very same lines keep a tick.
+  const cut = (n: number) =>
+    `- [ ] **Review** — html needs a look.\n  Files: \`a.js\`, \`b.js\` and ${n} more\n`;
+  assert(
+    ticked(decide(tick(cut(3), 'html'), 'OPEN', cut(3)).body)[0] === 'xhtml',
+    'a cut list, unchanged: the tick holds',
+  );
+  assert(
+    ticked(decide(tick(cut(3), 'html'), 'OPEN', cut(4)).body)[0] === ' html',
+    'a cut list that grew behind "and N more": the tick goes',
+  );
+  assert(
+    ticked(decide(tick(first, 'html').replace(/\n/g, '\r\n'), 'OPEN', first).body)[0] === 'xhtml',
+    'a body saved from the browser with CRLF line endings still has its ticks read',
+  );
+  const es = '- [ ] **Revisar** — html revisa.\n  Archivos: `a.js` y 2 más\n';
+  assert(
+    /^- \[x\]/.test(decide(es.replace('- [ ]', '- [X]'), 'OPEN', es).body),
+    'Spanish, and a capital X, read the same',
+  );
+
+  // End to end with the CLI's own summary, so the format above cannot drift from the real one.
+  const app = join(work, 'app');
+  mkdirSync(join(app, 'src'), { recursive: true });
+  writeFileSync(join(app, 'package.json'), '{}');
+  writeFileSync(
+    join(app, 'src', 'comment.js'),
+    "export const show = (el, c) => { el.innerHTML = '<p>' + c.body + '</p>'; };\n",
+  );
+  const cli = join(import.meta.dirname, '..', 'src', 'cli.ts');
+  const scan = (out: string) =>
+    spawnSync(
+      process.execPath,
+      [
+        '--import',
+        import.meta.resolve('tsx'),
+        cli,
+        'scan',
+        app,
+        '--summary',
+        out,
+        '--public-summary',
+        '--yes',
+      ],
+      { encoding: 'utf8', env: { ...process.env, CI: '1' } },
+    );
+  scan(join(work, 'real-1.md'));
+  const real1 = existsSync(join(work, 'real-1.md'))
+    ? readFileSync(join(work, 'real-1.md'), 'utf8')
+    : '';
+  writeFileSync(
+    join(app, 'src', 'profile.js'),
+    "export const bio = (el, p) => { el.innerHTML = '<div>' + p.bio + '</div>'; };\n",
+  );
+  scan(join(work, 'real-2.md'));
+  const real2 = existsSync(join(work, 'real-2.md'))
+    ? readFileSync(join(work, 'real-2.md'), 'utf8')
+    : '';
+  const htmlTicked = (body: string) =>
+    /^- \[x\] \*\*Review\*\* — Check that nothing a user typed/m.test(body);
+  const owner = real1.replace(
+    /^- \[ \] (\*\*Review\*\* — Check that nothing a user typed)/m,
+    '- [x] $1',
+  );
+  assert(
+    htmlTicked(owner) && htmlTicked(decide(owner, 'OPEN', real1).body),
+    'the real summary: a ticked HTML-sink review holds while the code does not change',
+  );
+  assert(
+    real2.includes('src/profile.js') && !htmlTicked(decide(owner, 'OPEN', real2).body),
+    'and goes when a second file with innerHTML appears',
+  );
+
+  const yml = readFileSync(join(import.meta.dirname, '..', 'action.yml'), 'utf8');
+  assert(
+    /gh issue list[^\n]*--state all/.test(yml) && yml.includes('action/issue.mjs'),
+    'action.yml looks for the issue open or closed, and lets action/issue.mjs decide',
+  );
+  assert(
+    !/gh issue create[\s\S]*gh issue create/.test(yml),
+    'and has one way to create an issue, not two',
+  );
+  rmSync(work, { recursive: true, force: true });
+}
+
 console.log(
   fail === 0 ? `\n✅  ${pass} passed, 0 failed\n` : `\n❌  ${pass} passed, ${fail} failed\n`,
 );

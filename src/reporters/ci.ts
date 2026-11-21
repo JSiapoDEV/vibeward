@@ -46,7 +46,7 @@ const T = {
     kind: { review: 'Review', platform: 'Your builder', unchecked: 'Not checked' },
     prompt: 'Prompt to paste into Lovable, Bolt, v0 or your agent',
     footer:
-      'vibeward is deterministic: no AI ran here, and the same commit always gives the same list. Tick items as you handle them; the list is rebuilt on every push, and the issue closes itself when nothing is left.',
+      'vibeward is deterministic: no AI ran here, and the same commit always gives the same list. Tick items as you handle them; the list is rebuilt on every push, and a tick holds until the item names a new file. The issue closes when everything is fixed or ticked, and reopens only for something new.',
   },
   es: {
     sev: { critical: '🔴 Crítico', high: '🟠 Alto', medium: '🟡 Medio', low: '⚪ Bajo' },
@@ -61,7 +61,7 @@ const T = {
     kind: { review: 'Revisar', platform: 'Tu herramienta de IA', unchecked: 'No revisado' },
     prompt: 'Prompt para pegar en Lovable, Bolt, v0 o tu agente',
     footer:
-      'vibeward es determinista: aquí no corrió ninguna IA, y el mismo commit da siempre la misma lista. Marca lo que vayas resolviendo; la lista se rehace en cada push y el issue se cierra solo cuando no queda nada.',
+      'vibeward es determinista: aquí no corrió ninguna IA, y el mismo commit da siempre la misma lista. Marca lo que vayas resolviendo; la lista se rehace en cada push y la marca se mantiene mientras el ítem no sume un archivo nuevo. El issue se cierra cuando todo está corregido o marcado, y solo se reabre si aparece algo nuevo.',
   },
 };
 

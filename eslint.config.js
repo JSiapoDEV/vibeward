@@ -16,7 +16,7 @@ export default tseslint.config(
   },
   // Build scripts run in Node directly, so they get Node's globals.
   {
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.mjs', 'action/**/*.mjs'],
     languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
   },
 );

@@ -643,9 +643,11 @@ Each run leaves three things:
 
 - **The run summary**, on the run page: counts, what to fix, what is **pending**, and a prompt
   to paste into your builder.
-- **One issue**, `vibeward: pending`, updated on every push to the default branch and closed by
-  itself when nothing is left. Items you tick stay ticked. It reaches your GitHub notifications
-  and email, which is where someone who never opens the Security tab will see it.
+- **One issue**, `vibeward: pending`, updated on every push to the default branch. Items you tick
+  stay ticked, until the item names a file it did not before. It closes when everything is fixed
+  or ticked — or when you close it — and reopens, the same issue, only for something new. It
+  reaches your GitHub notifications and email, which is where someone who never opens the
+  Security tab will see it.
 - **SARIF** in the Security tab. On a private repository that needs GitHub Code Security; when
   the upload is refused, the job does not fail over it.
 
