@@ -1,6 +1,6 @@
 # Measurement methodology
 
-vibeward publishes three numbers that reproduce from this repository: **1,163 assertions**, **0
+vibeward publishes three numbers that reproduce from this repository: **1,181 assertions**, **0
 false positives on 46 benign documents**, **0 false positives on 103 benign prompts across three
 languages**. A fourth — **30 of 31 real apps scanned without a crash** — does not reproduce from
 anything, and is kept out of this list on purpose; §6 gives it in full and says why nobody but the
@@ -18,8 +18,8 @@ Only the first is measured here. Everything below is a statement about inputs in
 rules in `src/`, and about one scan of thirty-one real sites run in a mode that deliberately
 looked at less than half of what matters. None of it is a statement about the security of any app.
 
-Every figure below was produced by running `npm test` on the tagged commit for **v0.8.3**
-(`src/core/version.ts:2`, released `2026-11-20`). Where a number could not be re-derived from the
+Every figure below was produced by running `npm test` on the tagged commit for **v0.8.4**
+(`src/core/version.ts:2`, released `2026-11-21`). Where a number could not be re-derived from the
 code, it is marked as such rather than repeated.
 
 ---
@@ -184,8 +184,8 @@ figure is their sum.
 | `test/intent-test.ts`    | **170**    | The prompt gate, en + es + pt                                            |
 | `test/injection-test.ts` | **83**     | The content gate                                                         |
 | `test/hosts-test.ts`     | **208**    | One golden payload per editor, per moment, the guard levels and the end-of-turn summary, plus adversarial regressions |
-| `test/contract-test.ts`  | **79**     | The promises in §1.2, asserted                                           |
-| **Total**                | **1,163**  |                                                                          |
+| `test/contract-test.ts`  | **97**     | The promises in §1.2, asserted                                           |
+| **Total**                | **1,181**  |                                                                          |
 
 `test/self-test.ts:1` states its own boundary: _"Self-test with SYNTHETIC data (no real secrets).
 Validates detection logic without touching any external system."_ No suite touches an external
@@ -523,7 +523,7 @@ _class_. The benign corpus went from 41 to 46 for this, and the count is in §2.
 This is the only measurement in this project taken against systems the maintainer does not own.
 It is reported with its method and its limits because the limits are larger than the result.
 
-**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.8.3. Treat the
+**Date and version.** 9 August 2026, **v0.2.0**. It has **not** been re-run on v0.8.4. Treat the
 figures as historical.
 
 **Method.** A scan has two layers with very different sensitivity:
@@ -586,7 +586,7 @@ itself (§3.2).
 ```bash
 git clone https://github.com/JSiapoDEV/vibeward
 cd vibeward
-git checkout v0.8.3     # every figure below is from this tag, not from HEAD
+git checkout v0.8.4     # every figure below is from this tag, not from HEAD
 npm ci
 npm test
 ```

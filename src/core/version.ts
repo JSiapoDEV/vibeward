@@ -1,5 +1,5 @@
 // Single source of truth for the version string. Keep in sync with package.json.
-export const VERSION = '0.8.3';
+export const VERSION = '0.8.4';
 
 /**
  * The day this version was released, ISO. Bumped with VERSION, on the same line of the
@@ -15,7 +15,7 @@ export const VERSION = '0.8.3';
  * pinned copy that knows its own age is the better half of that trade — and it needs no
  * network, so "nothing about you is ever uploaded" stays literally true.
  */
-export const RELEASED = '2026-11-20';
+export const RELEASED = '2026-11-21';
 
 /** Past this, a copy is old enough that the lexicon has likely moved on without it. */
 const STALE_AFTER_DAYS = 60;
