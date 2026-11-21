@@ -663,9 +663,17 @@ console.log('\ninit in a real repository — personal hooks, backups out of the 
     );
 
     const local = readFileSync(join(repo, '.claude', 'settings.local.json'), 'utf8');
+    // The local copy is `bin/vibeward.mjs`, which only exists once `npm run build:plugin` ran.
+    // The publish workflow tests before it builds, so without it init falls back to the pin.
+    const built = existsSync(join(import.meta.dirname, '..', 'bin', 'vibeward.mjs'));
     assert(
-      /"Stop"/.test(local) && /vibeward\.mjs\\?" guard/.test(local) && !/npx/.test(local),
-      'the Claude Code hooks go to settings.local.json and run the local copy, not npx',
+      /"Stop"/.test(local) &&
+        (built
+          ? /vibeward\.mjs\\?" guard/.test(local) && !/npx/.test(local)
+          : /vibeward@\d+\.\d+\.\d+ guard/.test(local)),
+      built
+        ? 'the Claude Code hooks go to settings.local.json and run the local copy, not npx'
+        : 'the Claude Code hooks go to settings.local.json (pinned npx until bin/ is built)',
     );
     const shared = JSON.parse(readFileSync(join(repo, '.claude', 'settings.json'), 'utf8'));
     const sharedText = JSON.stringify(shared);
