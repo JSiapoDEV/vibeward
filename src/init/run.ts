@@ -555,7 +555,24 @@ function resolveGuardContext(
  * Copies the file aside before the first time vibeward changes it. Only the first time: a
  * second run must not bury the pristine original under its own output.
  */
+/**
+ * Whether git already holds this exact file: tracked, with nothing staged or unstaged. Then the
+ * commit is the backup — `git checkout -- <file>` restores it — and a copy is only noise.
+ */
+export function gitHasIt(path: string): boolean {
+  const dir = dirname(path);
+  const git = (...args: string[]) =>
+    spawnSync('git', ['-C', dir, ...args], { stdio: 'ignore' }).status;
+  return (
+    git('ls-files', '--error-unmatch', '--', path) === 0 &&
+    git('diff', '--quiet', '--', path) === 0 &&
+    git('diff', '--cached', '--quiet', '--', path) === 0
+  );
+}
+
 function backupOnce(path: string, cwd: string, home: string): string | null {
+  // A file git already has committed, unchanged, needs no copy: the commit is the backup.
+  if (gitHasIt(path)) return null;
   // Under `.vibeward/backups/`, which ignores itself — not beside the file, where
   // `CLAUDE.md.vibeward.bak` sat in the repository root, untracked, one `git add .` away.
   const base = path.startsWith(cwd + sep) ? cwd : path.startsWith(home + sep) ? home : null;
@@ -760,7 +777,7 @@ export async function runInit(opts: InitOptions): Promise<never> {
   }
   if (pending.some((r) => r.action === 'merge')) {
     log(
-      `\n${C.dim}Existing files are merged, never overwritten, and copied to .vibeward/backups/ first.${C.reset}`,
+      `\n${C.dim}Existing files are merged, never overwritten. One git already has committed is not copied — git keeps the original; anything else is copied to .vibeward/backups/ first.${C.reset}`,
     );
   }
 

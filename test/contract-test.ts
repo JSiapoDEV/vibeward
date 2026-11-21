@@ -684,13 +684,33 @@ console.log('\ninit in a real repository — personal hooks, backups out of the 
       "the old guard leaves the shared settings.json; the team's hook and permissions stay",
     );
     assert(
-      existsSync(join(repo, '.vibeward', 'backups', 'CLAUDE.md.bak')) &&
+      !existsSync(join(repo, '.vibeward', 'backups')) &&
         !existsSync(join(repo, 'CLAUDE.md.vibeward.bak')),
-      'the CLAUDE.md backup goes to .vibeward/backups/, not beside the file',
+      'files git already has committed are not copied: the commit is the backup',
+    );
+    writeFileSync(join(repo, 'AGENTS.md'), '# Untracked notes\n');
+    spawnSync(
+      process.execPath,
+      [
+        '--import',
+        import.meta.resolve('tsx'),
+        cli,
+        'init',
+        '--scope',
+        'project',
+        '--targets',
+        'agents-md',
+        '--yes',
+      ],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: { ...process.env, HOME: home, PATH: '/usr/bin:/bin', CI: '' },
+      },
     );
     assert(
-      existsSync(join(repo, '.vibeward', 'backups', '.claude', 'settings.json.bak')),
-      'and so does the settings.json one',
+      existsSync(join(repo, '.vibeward', 'backups', 'AGENTS.md.bak')),
+      'a file git cannot restore — untracked — is copied to .vibeward/backups/ first',
     );
     assert(
       !/[Ss]upabase/.test(readFileSync(join(repo, 'CLAUDE.md'), 'utf8')),

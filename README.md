@@ -475,8 +475,9 @@ gate never sees it, because there was no prompt.
 
 It previews every file before touching disk, never overwrites a file it did not write, merges
 settings files key by key (your other hooks stay put) and markdown between markers — so
-re-running is how you *update*. It backs up any existing file to `.vibeward/backups/` before its
-first change — a folder git ignores on its own — and works non-interactively for CI and dotfiles.
+re-running is how you *update*. A file git already has committed is not copied — the commit is the backup; anything git could
+not restore is copied to `.vibeward/backups/` first, a folder git ignores on its own. It also
+works non-interactively for CI and dotfiles.
 
 In a project, the Claude Code hooks go to `.claude/settings.local.json`, which `init` adds to
 `.git/info/exclude` (local, never committed) when git would otherwise see it. Because that file is
